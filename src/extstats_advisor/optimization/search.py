@@ -506,6 +506,10 @@ def greedy_add_search(
         return finish(TERMINATION_BUDGET_BEFORE_ROUND)
     if best_singleton.singleton_objective >= current_objective:
         return finish(TERMINATION_LOCAL_OPTIMUM)
+    try:
+        deadline.ensure_available()
+    except SearchBudgetExpired:
+        return finish(TERMINATION_BUDGET_BEFORE_ROUND)
     current_membership.add(best_singleton.candidate_id)
     accepted_moves.append(
         AcceptedMove(
@@ -528,12 +532,14 @@ def greedy_add_search(
         if not remaining:
             return finish(TERMINATION_ALL_SELECTED)
         evaluations: list[SearchEvaluation] = []
+        round_evaluation_attempted = False
         for candidate_id in remaining:
             attempted_configuration = False
             try:
                 deadline.ensure_available()
                 proposed_membership = frozenset((*current_membership, candidate_id))
                 attempted_configuration = True
+                round_evaluation_attempted = True
                 live_configuration_evaluation_count += 1
                 result = evaluate_configuration(proposed_membership, deadline)
                 if result.loss_contract != loss_contract:
@@ -544,9 +550,9 @@ def greedy_add_search(
                     attempted_configuration
                 )
                 return finish(
-                    TERMINATION_BUDGET_BEFORE_ROUND
-                    if not evaluations
-                    else TERMINATION_BUDGET_INCOMPLETE_ROUND
+                    TERMINATION_BUDGET_INCOMPLETE_ROUND
+                    if round_evaluation_attempted
+                    else TERMINATION_BUDGET_BEFORE_ROUND
                 )
             evaluations.append(
                 SearchEvaluation(
@@ -555,6 +561,11 @@ def greedy_add_search(
                     result.objective,
                 )
             )
+        try:
+            deadline.ensure_available()
+        except SearchBudgetExpired:
+            partial_final_round_evaluation_count = len(evaluations)
+            return finish(TERMINATION_BUDGET_INCOMPLETE_ROUND)
         completed_rounds.append(CompletedSearchRound(len(completed_rounds) + 2, tuple(evaluations)))
         best = min(
             enumerate(evaluations),

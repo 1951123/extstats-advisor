@@ -202,8 +202,87 @@ def test_budget_expiry_discards_incomplete_round() -> None:
     assert result.runtime_metadata["partial_final_round_evaluation_count"] == 2
 
 
-def test_budget_expiry_before_round_keeps_last_accepted_state() -> None:
+def test_budget_expiry_on_first_live_evaluation_is_incomplete_round(tmp_path) -> None:
+    profile = _profile()
+    plan = create_optimization_plan(profile, candidate_limit=3, wall_clock_seconds=1.0)
+    calls = []
+
+    def evaluate(membership, _deadline):
+        calls.append(plan.ordered_configuration(membership))
+        raise SearchBudgetExpired("test deadline")
+
+    result = greedy_add_search(profile, plan, _Utility(), evaluate, _identity())
+    assert calls == [("A", "B")]
+    assert result.termination_reason == "budget-expired-incomplete-round"
+    assert result.runtime_metadata["partial_final_round_evaluation_count"] == 1
+    assert result.completed_rounds == ()
+    assert result.final_ordered_candidate_ids == ("A",)
+
+    path = tmp_path / "first-live-expiry.json"
+    write_search_result(result, path)
+    validate_search_result(path, singleton_profile=profile, optimization_plan=plan)
+
+
+def test_budget_expiry_before_round_keeps_last_accepted_state(tmp_path) -> None:
     values = iter((0.0, 2.0, 2.0))
+    profile = _profile()
+    plan = create_optimization_plan(profile, candidate_limit=3, wall_clock_seconds=1.0)
+    calls = []
+
+    def clock():
+        return next(values)
+
+    def fail_evaluate(membership, _deadline):
+        calls.append(membership)
+        pytest.fail("no live round should start")
+
+    result = greedy_add_search(
+        profile,
+        plan,
+        _Utility(),
+        fail_evaluate,
+        _identity(),
+        clock=clock,
+    )
+    assert result.final_ordered_candidate_ids == ()
+    assert result.termination_reason == "budget-expired-before-round"
+    assert result.runtime_metadata["partial_final_round_evaluation_count"] == 0
+    assert calls == []
+
+    path = tmp_path / "before-round-expiry.json"
+    write_search_result(result, path)
+    validate_search_result(path, singleton_profile=profile, optimization_plan=plan)
+
+
+def test_budget_expiry_after_all_evaluations_before_commit_discards_round(tmp_path) -> None:
+    values = iter((0.0,) * 8 + (2.0, 2.0))
+    profile = _profile()
+    plan = create_optimization_plan(profile, candidate_limit=3, wall_clock_seconds=1.0)
+    calls = []
+
+    def clock():
+        return next(values)
+
+    def evaluate(membership, _deadline):
+        ordered = plan.ordered_configuration(membership)
+        calls.append(ordered)
+        return _utility_result({("A", "B"): 6.0, ("A", "C"): 4.0}[ordered])
+
+    result = greedy_add_search(profile, plan, _Utility(), evaluate, _identity(), clock=clock)
+    assert calls == [("A", "B"), ("A", "C")]
+    assert result.termination_reason == "budget-expired-incomplete-round"
+    assert result.runtime_metadata["partial_final_round_evaluation_count"] == 2
+    assert result.completed_rounds == ()
+    assert result.final_ordered_candidate_ids == ("A",)
+    assert [move.added_candidate_id for move in result.accepted_moves] == ["A"]
+
+    path = tmp_path / "pre-commit-expiry.json"
+    write_search_result(result, path)
+    validate_search_result(path, singleton_profile=profile, optimization_plan=plan)
+
+
+def test_budget_expiry_during_cached_first_round_does_not_accept_singleton() -> None:
+    values = iter((0.0, 0.0, 0.0, 2.0, 2.0))
     profile = _profile()
     plan = create_optimization_plan(profile, candidate_limit=3, wall_clock_seconds=1.0)
 
@@ -214,12 +293,15 @@ def test_budget_expiry_before_round_keeps_last_accepted_state() -> None:
         profile,
         plan,
         _Utility(),
-        lambda _membership, _deadline: pytest.fail("no live round should start"),
+        lambda _membership, _deadline: pytest.fail("cached expiry must precede live search"),
         _identity(),
         clock=clock,
     )
-    assert result.final_ordered_candidate_ids == ()
     assert result.termination_reason == "budget-expired-before-round"
+    assert result.runtime_metadata["partial_final_round_evaluation_count"] == 0
+    assert result.accepted_moves == ()
+    assert result.final_ordered_candidate_ids == ()
+    assert result.final_objective == profile.baseline.objective
 
 
 def test_search_result_artifact_is_deterministic_and_validated(tmp_path) -> None:

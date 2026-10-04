@@ -38,13 +38,23 @@ adapter sets a bounded positive transaction-local `statement_timeout` before
 each potentially waiting operation and checks the monotonic deadline before
 activation, between workload queries, and after query execution.
 
-A round is committable only after every remaining candidate succeeds and the
-deadline is still valid. If expiry occurs before a round, the result uses
-`budget-expired-before-round`. If expiry occurs during a round, all partial
-evaluations are non-semantic diagnostics and the result uses
-`budget-expired-incomplete-round`; the final membership remains the last fully
-accepted configuration. Planner and utility errors that are not deadline
- cancellations fail the search and publish no result.
+A live round is committed only after every remaining candidate has returned
+successfully **and** the deadline is still valid at the round decision
+boundary. If expiry occurs before `evaluate_configuration` is entered for any
+candidate in the required live round, the result uses
+`budget-expired-before-round` and its partial count is zero. Once any live
+candidate evaluation has been entered, including an evaluation that expires
+before returning, the result uses `budget-expired-incomplete-round`. Expiry
+after the final candidate returns but before the decision-boundary check has
+the same incomplete-round meaning. All partial evaluations are
+non-semantic diagnostics, the round is not committed, and the final membership
+remains the last fully accepted configuration. Planner and utility errors that
+are not deadline cancellations fail the search and publish no result.
+
+The cached singleton round is also charged to the search budget, but has no
+incomplete-cached state. If the deadline expires before its accepted move is
+committed, the result is `budget-expired-before-round` with an empty final
+membership and zero live evaluations.
 
 The result records the source and plan digests, planner identity, utility and
 loss contracts, cached first-round evaluations, complete later-round
