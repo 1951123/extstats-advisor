@@ -78,7 +78,8 @@ jobs:
       - name: Run patched PostgreSQL integration
         run: pytest -m patched_integration
         env:
-          EXTSTATS_ADVISOR_TEST_PATCHED_POSTGRES_DSN: postgresql://postgres@localhost:55438/postgres
+          EXTSTATS_ADVISOR_TEST_PATCHED_POSTGRES_DSN: "postgresql://postgres@localhost:55438/postgres"
       - name: Stop patched PostgreSQL
         if: always()
-        run: "$GITHUB_WORKSPACE/.pgextadv/bin/pg_ctl" -D "$GITHUB_WORKSPACE/.pgdata" -m fast -w stop
+        run: |
+          "$GITHUB_WORKSPACE/.pgextadv/bin/pg_ctl" -D "$GITHUB_WORKSPACE/.pgdata" -m fast -w stop
