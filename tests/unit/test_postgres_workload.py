@@ -3,12 +3,14 @@ from __future__ import annotations
 import pytest
 
 from extstats_advisor.candidates.groups import derive_relevant_groups
+from extstats_advisor.dbms.postgres.acquisition import PostgresSnapshotAcquirer
 from extstats_advisor.dbms.postgres.workload import analyze_query, contains_parameter
-from extstats_advisor.errors import CandidateGenerationError
+from extstats_advisor.errors import CandidateGenerationError, GroundTruthAcquisitionError
 from extstats_advisor.snapshot.model import (
     ColumnSchema,
     RelationName,
     RelationSchema,
+    Workload,
     WorkloadQuery,
 )
 
@@ -112,3 +114,24 @@ def test_zero_weight_unsupported_query_does_not_create_groups(order_schema) -> N
 def test_parameter_detection_distinguishes_sql_parameters_from_literals() -> None:
     assert contains_parameter("SELECT * FROM items WHERE id = $1") is True
     assert contains_parameter("SELECT '$1' AS literal") is False
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        'SELECT * FROM "Order Facts" LIMIT 1',
+        'SELECT count(*) FROM "Order Facts"',
+    ],
+)
+def test_cardinality_changing_truth_fails_before_count_execution(order_schema, sql) -> None:
+    class UnexpectedTruthExecution:
+        def execute(self, statement, parameters=None):
+            raise AssertionError("unsupported truth query reached PostgreSQL")
+
+    with pytest.raises(GroundTruthAcquisitionError):
+        PostgresSnapshotAcquirer("postgresql://unused")._collect_truth(
+            UnexpectedTruthExecution(),
+            Workload("invalid-truth-workload", (WorkloadQuery("q_invalid", sql),)),
+            order_schema,
+            object(),
+        )
