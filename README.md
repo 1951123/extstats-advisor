@@ -47,5 +47,9 @@ sampling, and credential handling are documented in
 See [the architecture](docs/architecture.md) and the precise
 [snapshot contract](docs/advisor-snapshot-v1.md).
 
+Offline candidate generation is available after snapshot creation. See
+[candidate generation](docs/candidate-generation.md) for the deliberately
+narrow PostgreSQL SQL scope and structural generation boundary.
+
 Licensing is intentionally undecided; a production-readiness TODO records that
 decision.

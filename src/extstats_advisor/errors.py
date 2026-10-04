@@ -11,3 +11,11 @@ class SnapshotValidationError(ExtStatsAdvisorError):
 
 class SnapshotCompatibilityError(SnapshotValidationError):
     """Raised when a snapshot cannot be consumed by this implementation."""
+
+
+class CandidateGenerationError(ExtStatsAdvisorError):
+    """Raised when workload-derived candidate generation cannot proceed safely."""
+
+
+class CandidateUniverseValidationError(CandidateGenerationError):
+    """Raised when a candidate-universe artifact is malformed or inconsistent."""

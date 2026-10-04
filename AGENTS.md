@@ -18,7 +18,9 @@ Mandatory invariants:
    verified sample realization.
 6. The advisor core does not reimplement a DBMS cardinality estimator.
 7. Workload-derived attribute groups and DBMS-supplied statistic kinds are
-   separate concerns.
+   separate concerns. PostgreSQL SQL is parsed in the PostgreSQL adapter into
+   portable predicate profiles; core group derivation never sees PostgreSQL
+   ASTs or catalog internals.
 8. DBMS internals such as PostgreSQL OIDs and catalog relations stay inside a
    backend package and never enter the portable snapshot contract.
 9. Planner-visible statistics ordering is a backend capability.
@@ -34,6 +36,18 @@ Mandatory invariants:
     non-semantic; DBMS identity, consistency, semantic provenance, and
     sensitivity are semantic.
 
-Bootstrap scope intentionally excludes PostgreSQL extraction, planner
-sandboxing, candidate generation, search, parallel pools, deployment, and
-maintenance budgeting.
+Candidate generation is structural only. Keep these stages distinct:
+
+- generation: workload-derived relevant groups and backend capability expansion;
+- static catalog order: deterministic artifact/tie-break order only;
+- ranking: later singleton utility over all generated candidates;
+- screening: later optimizer-budget restriction after ranking.
+
+Static catalog precedence is not the final planner-visible PostgreSQL statistics
+order. Later singleton profiling will derive that order. Candidate generation
+contains no utility score, top-K restriction, search, recommendation, or
+deployment.
+
+Current scope includes PostgreSQL snapshot acquisition and offline candidate
+generation. Planner sandboxing, native payload construction, search, parallel
+pools, deployment, and maintenance budgeting remain excluded.

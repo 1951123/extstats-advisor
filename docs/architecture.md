@@ -23,12 +23,16 @@ Production DB
 AdvisorSnapshot (Σ, S, P, W)
     | verify / deserialize
     v
-DBMS-specific planner sandbox(s)
-    | native ordinary statistics, candidate statistics, what-if planning
+PostgreSQL workload analyzer
+    | portable predicate profiles
     v
-Budget-bounded advisor
+Relevant attribute groups (core)
+    | PostgreSQL capability expansion
     v
-Recommendation
+CandidateUniverse v1
+    | future native materialization / planner sandbox
+    v
+Planner sandbox and later advisor stages
 ```
 
 The implementation includes the sealed snapshot contract, typed Arrow sample
@@ -37,7 +41,14 @@ acquisition backend. That backend is deliberately limited to one read-only
 ordinary base table: schema extraction, `pg_class.reltuples` population
 metadata, and bounded typed sampling. Sample replay, native statistics
 construction, hypothetical configuration activation, native planner estimates,
-and backend configuration capabilities are not implemented here.
+and planner execution are not implemented here. Candidate generation is an
+offline derived artifact: the PostgreSQL adapter parses its SQL dialect into
+portable predicate profiles, core derives relevant column pairs, and the
+PostgreSQL capability advertises native kinds without constructing payloads.
+
+Generation, static precedence, ranking, and screening are separate stages.
+The static PostgreSQL precedence in `CandidateUniverse v1` is deterministic
+artifact ordering only, not final planner-visible statistics order.
 
 The research system is separate: `pg-extstats-benchmarks` owns datasets,
 truth, experiment protocols, ablations, and paper evaluation. The production

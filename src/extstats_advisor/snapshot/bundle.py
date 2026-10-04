@@ -319,4 +319,5 @@ def load_snapshot(path: Path) -> AdvisorSnapshot:
         manifest.get("semantic_provenance", {}),
         manifest.get("runtime_metadata", {}),
         manifest.get("sensitivity", {}),
+        manifest["semantic_digest"],
     )

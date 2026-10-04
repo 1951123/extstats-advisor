@@ -11,6 +11,7 @@ following gates remain open:
 - [ ] planner sandbox isolation;
 - [ ] failure recovery;
 - [x] acquisition timeouts and bounded sampling resource limit;
+- [x] offline workload-derived candidate universe v1;
 - [ ] multi-instance lifecycle;
 - [ ] PostgreSQL version compatibility policy;
 - [ ] upgrade and migration policy;

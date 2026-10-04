@@ -269,6 +269,7 @@ class AdvisorSnapshot:
             "anonymized_or_encrypted_by_this_repository": False,
         }
     )
+    semantic_digest: str | None = None
 
     def __post_init__(self) -> None:
         relation_ids = [schema.relation_id for schema in self.schemas]
@@ -283,6 +284,10 @@ class AdvisorSnapshot:
             )
         if set(self.samples) != set(relation_ids):
             raise SnapshotValidationError("samples must cover exactly the schema relations")
+        if self.semantic_digest is not None and (
+            not isinstance(self.semantic_digest, str) or len(self.semantic_digest) != 64
+        ):
+            raise SnapshotValidationError("snapshot semantic_digest must be a SHA-256 token")
 
     @property
     def schema_by_id(self) -> dict[str, RelationSchema]:
