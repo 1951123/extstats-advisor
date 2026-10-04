@@ -93,6 +93,17 @@ def postgres_capture_dsn() -> str:
 
 
 @pytest.fixture(scope="session")
+def postgres_admin_dsn(postgres_capture_dsn: str) -> str:
+    """The admin connection used to provision the stock integration fixture."""
+
+    del postgres_capture_dsn
+    admin_dsn = os.environ.get("EXTSTATS_ADVISOR_TEST_POSTGRES_ADMIN_DSN")
+    if not admin_dsn:
+        pytest.skip("set EXTSTATS_ADVISOR_TEST_POSTGRES_ADMIN_DSN for stock PostgreSQL integration")
+    return admin_dsn
+
+
+@pytest.fixture(scope="session")
 def patched_postgres_dsn() -> str:
     dsn = os.environ.get("EXTSTATS_ADVISOR_TEST_PATCHED_POSTGRES_DSN")
     if not dsn:

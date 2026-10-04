@@ -5,6 +5,12 @@ only when live PostgreSQL capture is required.
 """
 
 from extstats_advisor.dbms.postgres.acquisition import PostgresSnapshotAcquirer, capture_snapshot
+from extstats_advisor.dbms.postgres.deployment import (
+    DEFAULT_LOCK_TIMEOUT_MS,
+    DEFAULT_STATEMENT_TIMEOUT_MS,
+    deploy_postgres_recommendation,
+    preflight_postgres_recommendation,
+)
 from extstats_advisor.dbms.postgres.errors import (
     InvalidPopulationEstimateError,
     PostgresAcquisitionError,
@@ -43,6 +49,8 @@ from extstats_advisor.dbms.postgres.sandbox import (
 from extstats_advisor.dbms.postgres.search import search_postgres_greedy_add
 
 __all__ = [
+    "DEFAULT_LOCK_TIMEOUT_MS",
+    "DEFAULT_STATEMENT_TIMEOUT_MS",
     "POSTGRES_PLANNER_SANDBOX_CONTRACT",
     "InvalidPopulationEstimateError",
     "PlannerEstimate",
@@ -61,10 +69,12 @@ __all__ = [
     "UnsupportedRelationError",
     "build_postgres_recommendation",
     "capture_snapshot",
+    "deploy_postgres_recommendation",
     "destroy_postgres_planner_sandbox",
     "materialize_native_stats",
     "materialize_postgresql_native_stats",
     "postgres_statistics_object_name",
+    "preflight_postgres_recommendation",
     "prepare_postgres_planner_sandbox",
     "profile_postgres_singletons",
     "quote_postgresql_identifier",

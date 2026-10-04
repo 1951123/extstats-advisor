@@ -61,6 +61,23 @@ outside the search stage. Recommendation is a separate pure consuming stage:
 it derives desired PostgreSQL state and review-only DDL without connecting to
 the production database.
 
+The upcoming deployment/preflight boundary is explicitly add-only under
+`postgresql-add-only-deployment-v1`. The current Recommendation owns only the
+statistics it names; all other production extended-statistics objects remain
+external DBA/operator-owned objects. Their presence is not a deployment
+blocker, and deployment must not reconcile, replace, rename, alter, drop, or
+garbage-collect them. A deterministic name collision with a current
+Recommendation is the exception and must fail closed; `IF NOT EXISTS` is not a
+conflict policy.
+
+The search and Recommendation stages evaluate `M*`, not necessarily
+`E_existing ∪ M*`. Their objective therefore must not be described as a
+guarantee for the combined production state when external statistics coexist.
+The DBA/operator chooses the reconciliation policy. Physical verification will
+preserve only the Recommendation-relative selected-object subsequence
+`D = F|_(M*)`; external objects may appear anywhere between those selected
+objects in the global OID sequence.
+
 The implementation includes the sealed snapshot contract, typed Arrow sample
 serialization, validation, inspection, and a first PostgreSQL source
 acquisition backend. That backend is deliberately limited to one read-only

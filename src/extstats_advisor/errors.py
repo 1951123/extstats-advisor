@@ -95,3 +95,19 @@ class RecommendationError(ExtStatsAdvisorError):
 
 class RecommendationValidationError(RecommendationError):
     """Raised when a deployment recommendation artifact is malformed or incompatible."""
+
+
+class DeploymentError(ExtStatsAdvisorError):
+    """Raised when a production deployment cannot complete safely."""
+
+
+class DeploymentValidationError(DeploymentError):
+    """Raised when deployment inputs or live preflight state are incompatible."""
+
+
+class DeploymentMutationError(DeploymentError):
+    """Raised when a transactional deployment fails before commit."""
+
+
+class DeploymentCommittedButUnverifiedError(DeploymentError):
+    """Raised when COMMIT succeeded but post-commit verification failed."""

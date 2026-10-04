@@ -17,11 +17,15 @@ from extstats_advisor.candidates import (
 )
 from extstats_advisor.dbms.base import AcquisitionRequest, SamplePolicy
 from extstats_advisor.dbms.postgres import (
+    DEFAULT_LOCK_TIMEOUT_MS,
+    DEFAULT_STATEMENT_TIMEOUT_MS,
     PostgresPlannerSession,
     PostgresSnapshotAcquirer,
     PostgresStatisticsConfiguration,
     build_postgres_recommendation,
+    deploy_postgres_recommendation,
     destroy_postgres_planner_sandbox,
+    preflight_postgres_recommendation,
     prepare_postgres_planner_sandbox,
     profile_postgres_singletons,
     render_postgres_sql,
@@ -29,6 +33,11 @@ from extstats_advisor.dbms.postgres import (
     verify_postgres_planner_sandbox,
 )
 from extstats_advisor.dbms.postgres.acquisition import _workload_from_path
+from extstats_advisor.deployment.artifact import (
+    inspect_deployment_result,
+    validate_deployment_result,
+    write_deployment_result,
+)
 from extstats_advisor.errors import ExtStatsAdvisorError
 from extstats_advisor.ground_truth import (
     ArtifactGroundTruthProvider,
@@ -234,7 +243,97 @@ def _parser() -> argparse.ArgumentParser:
     inspect_recommendation_command.add_argument("recommendation", type=Path)
     sql_recommendation = recommendation_commands.add_parser("sql")
     sql_recommendation.add_argument("recommendation", type=Path)
+    deployment = commands.add_parser("deployment")
+    deployment_commands = deployment.add_subparsers(dest="deployment_command", required=True)
+
+    def add_deployment_sources(command: argparse.ArgumentParser) -> None:
+        command.add_argument("snapshot", type=Path)
+        command.add_argument("candidate_universe", type=Path)
+        command.add_argument("native_repository", type=Path)
+        command.add_argument("ground_truth", type=Path)
+        command.add_argument("singleton_profile", type=Path)
+        command.add_argument("optimization_plan", type=Path)
+        command.add_argument("search_result", type=Path)
+        command.add_argument("recommendation", type=Path)
+        command.add_argument("--dsn", default=os.environ.get("EXTSTATS_ADVISOR_POSTGRES_DSN"))
+        command.add_argument("--lock-timeout-ms", type=int, default=DEFAULT_LOCK_TIMEOUT_MS)
+        command.add_argument(
+            "--statement-timeout-ms", type=int, default=DEFAULT_STATEMENT_TIMEOUT_MS
+        )
+
+    apply_deployment = deployment_commands.add_parser("apply")
+    apply_backend = apply_deployment.add_subparsers(dest="deployment_backend", required=True)
+    apply_postgres = apply_backend.add_parser("postgres")
+    add_deployment_sources(apply_postgres)
+    apply_postgres.add_argument("--output", required=True, type=Path)
+    preflight_deployment = deployment_commands.add_parser("preflight")
+    preflight_backend = preflight_deployment.add_subparsers(
+        dest="deployment_backend", required=True
+    )
+    preflight_postgres = preflight_backend.add_parser("postgres")
+    add_deployment_sources(preflight_postgres)
+    validate_deployment = deployment_commands.add_parser("validate")
+    validate_deployment.add_argument("deployment_result", type=Path)
+    validate_deployment.add_argument("recommendation", type=Path)
+    validate_deployment.add_argument("--snapshot", required=True, type=Path)
+    validate_deployment.add_argument("--candidate-universe", required=True, type=Path)
+    validate_deployment.add_argument("--native-repository", required=True, type=Path)
+    validate_deployment.add_argument("--ground-truth", required=True, type=Path)
+    validate_deployment.add_argument("--singleton-profile", required=True, type=Path)
+    validate_deployment.add_argument("--optimization-plan", required=True, type=Path)
+    validate_deployment.add_argument("--search-result", required=True, type=Path)
+    inspect_deployment = deployment_commands.add_parser("inspect")
+    inspect_deployment.add_argument("deployment_result", type=Path)
     return parser
+
+
+def _load_deployment_sources(args: argparse.Namespace) -> tuple[object, ...]:
+    snapshot = load_snapshot(args.snapshot)
+    universe = load_candidate_universe(args.candidate_universe, snapshot)
+    repository = load_native_stats_repository(args.native_repository)
+    ground_truth = load_ground_truth_set(args.ground_truth, snapshot)
+    singleton_profile = load_singleton_profile(args.singleton_profile)
+    optimization_plan = load_optimization_plan(args.optimization_plan)
+    search_result = load_search_result(args.search_result)
+    validate_singleton_profile(args.singleton_profile, snapshot, universe, repository, ground_truth)
+    validate_optimization_plan(
+        args.optimization_plan,
+        snapshot,
+        universe,
+        repository,
+        ground_truth,
+        singleton_profile,
+    )
+    validate_search_result(
+        args.search_result,
+        snapshot,
+        universe,
+        repository,
+        ground_truth,
+        singleton_profile,
+        optimization_plan,
+    )
+    recommendation = load_recommendation(args.recommendation)
+    validate_recommendation(
+        args.recommendation,
+        snapshot,
+        universe,
+        repository,
+        ground_truth,
+        singleton_profile,
+        optimization_plan,
+        search_result,
+    )
+    return (
+        snapshot,
+        universe,
+        repository,
+        ground_truth,
+        singleton_profile,
+        optimization_plan,
+        search_result,
+        recommendation,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -317,6 +416,89 @@ def main(argv: list[str] | None = None) -> int:
                 )
             else:
                 print(json.dumps(summary, sort_keys=True, indent=2))
+            return 0
+        if args.command == "deployment":
+            if args.deployment_command == "inspect":
+                print(
+                    json.dumps(
+                        inspect_deployment_result(args.deployment_result),
+                        sort_keys=True,
+                        indent=2,
+                    )
+                )
+                return 0
+            sources = _load_deployment_sources(args)
+            (
+                snapshot,
+                universe,
+                repository,
+                ground_truth,
+                singleton_profile,
+                optimization_plan,
+                search_result,
+                recommendation,
+            ) = sources
+            if args.deployment_command == "validate":
+                print(
+                    json.dumps(
+                        {
+                            "status": "valid",
+                            **validate_deployment_result(
+                                args.deployment_result,
+                                recommendation,
+                                source_snapshot=snapshot,
+                                candidate_universe=universe,
+                                native_repository=repository,
+                                singleton_profile=singleton_profile,
+                                optimization_plan=optimization_plan,
+                                search_result=search_result,
+                            ),
+                        },
+                        sort_keys=True,
+                    )
+                )
+                return 0
+            if args.deployment_command == "preflight":
+                report = preflight_postgres_recommendation(
+                    args.dsn,
+                    snapshot,
+                    universe,
+                    repository,
+                    ground_truth,
+                    singleton_profile,
+                    optimization_plan,
+                    search_result,
+                    recommendation,
+                    lock_timeout_ms=args.lock_timeout_ms,
+                    statement_timeout_ms=args.statement_timeout_ms,
+                )
+                print(json.dumps({"status": "ready", **report}, sort_keys=True))
+                return 0
+            result = deploy_postgres_recommendation(
+                args.dsn,
+                snapshot,
+                universe,
+                repository,
+                ground_truth,
+                singleton_profile,
+                optimization_plan,
+                search_result,
+                recommendation,
+                lock_timeout_ms=args.lock_timeout_ms,
+                statement_timeout_ms=args.statement_timeout_ms,
+            )
+            digest = write_deployment_result(result, args.output)
+            print(
+                json.dumps(
+                    {
+                        "status": "deployed",
+                        "output": str(args.output),
+                        "semantic_digest": digest,
+                        **inspect_deployment_result(args.output),
+                    },
+                    sort_keys=True,
+                )
+            )
             return 0
         if args.command == "sandbox":
             if not args.dsn:
