@@ -114,9 +114,6 @@ def patched_postgres_dsn() -> str:
         import psycopg
     except ImportError:
         pytest.skip("install extstats-advisor[postgres] for PostgreSQL integration")
-    try:
-        with psycopg.connect(dsn, autocommit=True) as connection:
-            connection.execute("SELECT 1")
-    except psycopg.Error as exc:
-        pytest.skip(f"patched PostgreSQL is unavailable: {exc}")
+    with psycopg.connect(dsn, autocommit=True) as connection:
+        connection.execute("SELECT 1")
     return dsn

@@ -233,7 +233,7 @@ def materialize_native_stats(
         )
         capabilities: PatchCapabilities = probe_patched_postgres(connection)
         sql = psycopg.sql
-        connection.execute("BEGIN ISOLATION LEVEL READ WRITE")
+        connection.execute("BEGIN READ WRITE")
         create_scratch_relation(connection, target_name, schema, sql)
         create_scratch_relation(connection, frozen_name, schema, sql)
         copy_arrow_table(connection, target_name, schema, table, sql, batch_size=batch_size)
