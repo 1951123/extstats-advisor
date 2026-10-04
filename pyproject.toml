@@ -11,6 +11,7 @@ dependencies = ["pyarrow>=16,<23"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3,<9", "ruff>=0.8,<1"]
+postgres = ["psycopg[binary]>=3.2,<4"]
 
 [project.scripts]
 extstats-advisor = "extstats_advisor.cli:main"
@@ -21,6 +22,7 @@ packages = ["src/extstats_advisor"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = ["integration: tests requiring a live stock PostgreSQL server"]
 
 [tool.ruff]
 target-version = "py312"

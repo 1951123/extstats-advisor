@@ -4,13 +4,13 @@ This bootstrap is production-oriented architecture, not production-proof. The
 following gates remain open:
 
 - [ ] license decision;
-- [ ] PostgreSQL production extractor;
-- [ ] production-safe bounded sampling;
+- [x] PostgreSQL v1 source extractor for one ordinary base table;
+- [x] production-safe bounded `SYSTEM` sampling with a candidate budget;
 - [ ] credential handling;
 - [ ] artifact encryption-at-rest story;
 - [ ] planner sandbox isolation;
 - [ ] failure recovery;
-- [ ] resource limits;
+- [x] acquisition timeouts and bounded sampling resource limit;
 - [ ] multi-instance lifecycle;
 - [ ] PostgreSQL version compatibility policy;
 - [ ] upgrade and migration policy;

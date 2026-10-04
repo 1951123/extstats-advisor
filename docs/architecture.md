@@ -31,12 +31,13 @@ Budget-bounded advisor
 Recommendation
 ```
 
-The bootstrap implements only the sealed snapshot contract, typed Arrow sample
-serialization, validation, inspection, and the DBMS acquisition boundary. The
-first concrete backend is planned to be PostgreSQL. Its later responsibilities
-include production extraction, sample replay, native statistics construction,
-hypothetical configuration activation, native planner estimates, and backend
-configuration capabilities. These are not implemented here.
+The implementation includes the sealed snapshot contract, typed Arrow sample
+serialization, validation, inspection, and a first PostgreSQL source
+acquisition backend. That backend is deliberately limited to one read-only
+ordinary base table: schema extraction, `pg_class.reltuples` population
+metadata, and bounded typed sampling. Sample replay, native statistics
+construction, hypothetical configuration activation, native planner estimates,
+and backend configuration capabilities are not implemented here.
 
 The research system is separate: `pg-extstats-benchmarks` owns datasets,
 truth, experiment protocols, ablations, and paper evaluation. The production
@@ -44,6 +45,6 @@ core never requires exact truth.
 
 For v1, the structured consistency declaration says that schema, population,
 and samples came from one `consistent-source-view`, while workload is supplied
-externally. This is deliberately DBMS-neutral; a later backend may map a
-read-only repeatable-read acquisition to it without exposing transaction
-syntax.
+externally. The PostgreSQL backend maps this to one explicit read-only
+repeatable-read transaction without exposing transaction syntax in the
+portable artifact.

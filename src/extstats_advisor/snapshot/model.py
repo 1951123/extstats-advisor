@@ -184,6 +184,8 @@ class Workload:
 
     def __post_init__(self) -> None:
         _identifier(self.workload_id, "workload ID")
+        if not isinstance(self.provenance, Mapping):
+            raise SnapshotValidationError("workload provenance must be an object")
         if not self.queries:
             raise SnapshotValidationError("workload must contain at least one query")
         ids = [query.query_id for query in self.queries]
@@ -202,6 +204,19 @@ class Workload:
         if self.provenance:
             value["provenance"] = dict(self.provenance)
         return value
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> Workload:
+        if not isinstance(value, Mapping) or not isinstance(value.get("queries"), list):
+            raise SnapshotValidationError("workload.json requires queries")
+        try:
+            return cls(
+                str(value.get("workload_id")),
+                tuple(WorkloadQuery(**query) for query in value["queries"]),
+                value.get("provenance", {}),
+            )
+        except (TypeError, KeyError) as exc:
+            raise SnapshotValidationError("invalid workload") from exc
 
 
 @dataclass(frozen=True, slots=True)

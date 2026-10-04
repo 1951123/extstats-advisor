@@ -25,7 +25,6 @@ from extstats_advisor.snapshot.model import (
     SampleDescriptor,
     SnapshotConsistency,
     Workload,
-    WorkloadQuery,
 )
 
 FORMAT_VERSION = "advisor-snapshot-v1"
@@ -90,17 +89,7 @@ def _load_population(value: dict[str, Any]) -> tuple[PopulationMetadata, ...]:
 
 
 def _load_workload(value: dict[str, Any]) -> Workload:
-    queries = value.get("queries")
-    if not isinstance(queries, list):
-        raise SnapshotValidationError("workload.json requires queries")
-    try:
-        return Workload(
-            str(value.get("workload_id")),
-            tuple(WorkloadQuery(**query) for query in queries),
-            value.get("provenance", {}),
-        )
-    except (TypeError, KeyError) as exc:
-        raise SnapshotValidationError("invalid workload") from exc
+    return Workload.from_dict(value)
 
 
 def _semantic_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -157,7 +146,11 @@ def write_snapshot(snapshot: AdvisorSnapshot, destination: Path) -> str:
                     table.num_rows,
                     "arrow-ipc-file",
                     digest_bytes(payload),
-                    {"library": "pyarrow", "format": "Arrow IPC file"},
+                    {
+                        "library": "pyarrow",
+                        "version": pa.__version__,
+                        "format": "Arrow IPC file",
+                    },
                 )
             )
         schema_json = {"relations": [item.to_dict() for item in snapshot.schemas]}

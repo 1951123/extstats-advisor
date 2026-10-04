@@ -39,6 +39,11 @@ extstats-advisor snapshot inspect path/to/snapshot
 pytest
 ```
 
+Install the optional PostgreSQL backend with `python -m pip install -e
+'.[postgres]'`. Its read-only capture contract, supported types, bounded
+sampling, and credential handling are documented in
+[PostgreSQL acquisition](docs/postgresql-acquisition.md).
+
 See [the architecture](docs/architecture.md) and the precise
 [snapshot contract](docs/advisor-snapshot-v1.md).
 
