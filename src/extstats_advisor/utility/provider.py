@@ -12,14 +12,20 @@ from extstats_advisor.snapshot.model import Workload
 from extstats_advisor.utility.loss import CardinalityLoss
 from extstats_advisor.utility.model import PerQueryUtility, UtilityResult
 
+UTILITY_CONTRACT_VERSION = "weighted-workload-mean-v1"
+
 
 class UtilityProvider(Protocol):
+    contract_version: str
+
     def evaluate(self, estimates: Mapping[str, float]) -> UtilityResult:
         """Evaluate one manually supplied planner configuration."""
 
 
 class WeightedWorkloadUtility:
     """Weighted arithmetic mean of one loss across positive-weight workload queries."""
+
+    contract_version = UTILITY_CONTRACT_VERSION
 
     def __init__(
         self,
@@ -33,6 +39,14 @@ class WeightedWorkloadUtility:
         contract = getattr(loss, "contract_version", None)
         if not isinstance(contract, str) or not contract:
             raise UtilityValidationError("cardinality loss contract_version is required")
+
+    @property
+    def utility_contract(self) -> str:
+        return self.contract_version
+
+    @property
+    def loss_contract(self) -> str:
+        return self._loss.contract_version
 
     def evaluate(self, estimates: Mapping[str, float]) -> UtilityResult:
         if not isinstance(estimates, Mapping):

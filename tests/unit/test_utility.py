@@ -68,9 +68,10 @@ def test_qerror_rejects_invalid_values(estimate, truth) -> None:
 
 
 def test_weighted_utility_ignores_zero_weight_and_returns_deterministic_records() -> None:
-    result = WeightedWorkloadUtility(_workload(), _provider(), QErrorLoss()).evaluate(
-        {"q1": 50, "q2": 0}
-    )
+    utility = WeightedWorkloadUtility(_workload(), _provider(), QErrorLoss())
+    assert utility.utility_contract == "weighted-workload-mean-v1"
+    assert utility.contract_version == "weighted-workload-mean-v1"
+    result = utility.evaluate({"q1": 50, "q2": 0})
     assert result.objective == pytest.approx(5 / 3)
     assert result.loss_contract == "qerror-cardinality-floor-1-v1"
     assert result.query_count == 2

@@ -12,6 +12,7 @@ from extstats_advisor.dbms.postgres.planner import (
     PostgresPlannerSession,
     PostgresStatisticsConfiguration,
 )
+from extstats_advisor.dbms.postgres.profiling import profile_postgres_singletons
 from extstats_advisor.dbms.postgres.sandbox import (
     destroy_postgres_planner_sandbox,
     prepare_postgres_planner_sandbox,
@@ -32,6 +33,11 @@ from extstats_advisor.native_stats.repository import (
     load_native_stats_repository,
     validate_native_stats_repository,
     write_native_stats_repository,
+)
+from extstats_advisor.optimization.artifact import (
+    load_singleton_profile,
+    validate_singleton_profile,
+    write_singleton_profile,
 )
 from extstats_advisor.snapshot.bundle import load_snapshot, write_snapshot
 from extstats_advisor.snapshot.model import (
@@ -233,6 +239,36 @@ def test_patched_planner_sandbox_is_catalogless_ordered_and_isolated(
         QErrorLoss(),
     )
 
+    profile_paths = (tmp_path / "singleton-first.json", tmp_path / "singleton-second.json")
+    profiles = []
+    for profile_path in profile_paths:
+        with PostgresPlannerSession(
+            patched_postgres_dsn, snapshot, universe, repository
+        ) as profiling_session:
+            profile = profile_postgres_singletons(
+                profiling_session,
+                snapshot,
+                universe,
+                repository,
+                utility,
+                ground_truth_semantic_digest=loaded_truth.semantic_digest
+                or loaded_truth.computed_semantic_digest,
+            )
+        write_singleton_profile(profile, profile_path)
+        validate_singleton_profile(profile_path, snapshot, universe, repository, loaded_truth)
+        profiles.append(load_singleton_profile(profile_path))
+
+    first_profile, second_profile = profiles
+    assert first_profile.computed_semantic_digest == second_profile.computed_semantic_digest
+    assert first_profile.present_count == 5
+    assert first_profile.absent_count == 1
+    assert first_profile.baseline.objective > 0
+    assert first_profile.frozen_ordered_candidate_ids
+    assert first_profile.runtime_metadata["baseline_configuration_count"] == 1
+    assert first_profile.runtime_metadata["singleton_configuration_count"] == 5
+    assert first_profile.runtime_metadata["planner_query_estimate_count"] == 6
+    profile_by_id = {item.candidate_id: item for item in first_profile.candidate_profiles}
+
     mcv = next(
         candidate
         for candidate in repository.candidate_models
@@ -241,6 +277,14 @@ def test_patched_planner_sandbox_is_catalogless_ordered_and_isolated(
     absent = next(
         candidate for candidate in repository.candidate_models if candidate.state == ABSENT_NATIVE
     )
+    assert profile_by_id[mcv.candidate_id].singleton_objective < first_profile.baseline.objective
+    assert profile_by_id[mcv.candidate_id].improvement > 0
+    assert (
+        profile_by_id[absent.candidate_id].singleton_objective == first_profile.baseline.objective
+    )
+    assert profile_by_id[absent.candidate_id].improvement == 0
+    assert profile_by_id[absent.candidate_id].frozen_precedence_rank is None
+    assert absent.candidate_id not in first_profile.frozen_ordered_candidate_ids
     second_present = next(
         candidate
         for candidate in repository.candidate_models

@@ -37,6 +37,10 @@ Planner configuration estimates + GroundTruthSet
     v
 CardinalityLoss -> UtilityProvider -> objective
 
+Baseline + every PRESENT singleton
+    v
+SingletonProfile v1 -> frozen utility precedence
+
 [future] objective -> optimizer/search
 ```
 
@@ -54,7 +58,14 @@ the PostgreSQL adapter parses its SQL dialect into portable predicate profiles,
 core derives relevant column pairs, and the PostgreSQL capability advertises
 native kinds without constructing payloads.
 
-Generation, static precedence, ranking, and screening are separate stages.
+Generation, static precedence, singleton utility profiling, ranking, and
+screening are separate stages. Singleton profiling evaluates the baseline and
+each PRESENT native candidate in one planner session, records ABSENT_NATIVE
+candidates as baseline-equivalent without planner EXPLAIN calls, and freezes
+the order by descending exact improvement, static precedence rank, then
+candidate ID. For a later admitted set M, the defined order is the restriction
+of this frozen order to M; this stage does not perform screening, search, or
+deployment.
 The static PostgreSQL precedence in `CandidateUniverse v1` is deterministic
 artifact ordering only, not final planner-visible statistics order.
 

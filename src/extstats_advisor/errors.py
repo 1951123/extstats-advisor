@@ -59,3 +59,11 @@ class UtilityError(ExtStatsAdvisorError):
 
 class UtilityValidationError(UtilityError):
     """Raised when estimates, truth, or utility inputs are invalid."""
+
+
+class SingletonProfilingError(ExtStatsAdvisorError):
+    """Raised when singleton utility profiling cannot complete safely."""
+
+
+class SingletonProfileValidationError(SingletonProfilingError):
+    """Raised when a SingletonProfile artifact is malformed or incompatible."""

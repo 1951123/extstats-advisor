@@ -22,6 +22,7 @@ from extstats_advisor.dbms.postgres import (
     PostgresStatisticsConfiguration,
     destroy_postgres_planner_sandbox,
     prepare_postgres_planner_sandbox,
+    profile_postgres_singletons,
     verify_postgres_planner_sandbox,
 )
 from extstats_advisor.dbms.postgres.acquisition import _workload_from_path
@@ -32,6 +33,11 @@ from extstats_advisor.ground_truth import (
     write_ground_truth_set,
 )
 from extstats_advisor.native_stats.repository import load_native_stats_repository
+from extstats_advisor.optimization.artifact import (
+    inspect_singleton_profile,
+    validate_singleton_profile,
+    write_singleton_profile,
+)
 from extstats_advisor.snapshot.bundle import load_snapshot, validate_snapshot, write_snapshot
 from extstats_advisor.utility import QErrorLoss, WeightedWorkloadUtility
 
@@ -111,6 +117,27 @@ def _parser() -> argparse.ArgumentParser:
         "--dsn", default=os.environ.get("EXTSTATS_ADVISOR_PATCHED_POSTGRES_DSN")
     )
     evaluate_postgres.add_argument("--candidate", action="append", default=[])
+    profiling = commands.add_parser("profiling")
+    profiling_commands = profiling.add_subparsers(dest="profiling_command", required=True)
+    singleton = profiling_commands.add_parser("singleton")
+    singleton_backend = singleton.add_subparsers(dest="profiling_backend", required=True)
+    singleton_postgres = singleton_backend.add_parser("postgres")
+    singleton_postgres.add_argument("snapshot", type=Path)
+    singleton_postgres.add_argument("candidate_universe", type=Path)
+    singleton_postgres.add_argument("native_repository", type=Path)
+    singleton_postgres.add_argument("ground_truth", type=Path)
+    singleton_postgres.add_argument(
+        "--dsn", default=os.environ.get("EXTSTATS_ADVISOR_PATCHED_POSTGRES_DSN")
+    )
+    singleton_postgres.add_argument("--output", required=True, type=Path)
+    validate_profile = profiling_commands.add_parser("validate")
+    validate_profile.add_argument("profile", type=Path)
+    validate_profile.add_argument("--snapshot", required=True, type=Path)
+    validate_profile.add_argument("--candidate-universe", required=True, type=Path)
+    validate_profile.add_argument("--native-repository", required=True, type=Path)
+    validate_profile.add_argument("--ground-truth", required=True, type=Path)
+    inspect_profile = profiling_commands.add_parser("inspect")
+    inspect_profile.add_argument("profile", type=Path)
     return parser
 
 
@@ -249,6 +276,60 @@ def main(argv: list[str] | None = None) -> int:
                         "query_id": result.query_id,
                         "ordered_candidate_ids": list(configuration.ordered_candidate_ids),
                         "estimated_rows": result.estimated_rows,
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
+        if args.command == "profiling":
+            if args.profiling_command == "inspect":
+                print(json.dumps(inspect_singleton_profile(args.profile), sort_keys=True, indent=2))
+                return 0
+            snapshot = load_snapshot(args.snapshot)
+            universe = load_candidate_universe(args.candidate_universe, snapshot)
+            repository = load_native_stats_repository(args.native_repository)
+            ground_truth = load_ground_truth_set(args.ground_truth, snapshot)
+            if args.profiling_command == "validate":
+                print(
+                    json.dumps(
+                        {
+                            "status": "valid",
+                            **validate_singleton_profile(
+                                args.profile, snapshot, universe, repository, ground_truth
+                            ),
+                        },
+                        sort_keys=True,
+                    )
+                )
+                return 0
+            if not args.dsn:
+                raise ExtStatsAdvisorError(
+                    "patched PostgreSQL DSN is required via --dsn or "
+                    "EXTSTATS_ADVISOR_PATCHED_POSTGRES_DSN"
+                )
+            utility_provider = WeightedWorkloadUtility(
+                snapshot.workload,
+                ArtifactGroundTruthProvider(ground_truth),
+                QErrorLoss(),
+            )
+            with PostgresPlannerSession(args.dsn, snapshot, universe, repository) as session:
+                profile = profile_postgres_singletons(
+                    session,
+                    snapshot,
+                    universe,
+                    repository,
+                    utility_provider,
+                    ground_truth_semantic_digest=ground_truth.semantic_digest
+                    or ground_truth.computed_semantic_digest,
+                )
+            digest = write_singleton_profile(profile, args.output)
+            print(
+                json.dumps(
+                    {
+                        "status": "profiled",
+                        "output": str(args.output),
+                        **inspect_singleton_profile(args.output),
+                        "semantic_digest": digest,
                     },
                     sort_keys=True,
                 )

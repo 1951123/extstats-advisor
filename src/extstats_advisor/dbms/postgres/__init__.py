@@ -25,6 +25,7 @@ from extstats_advisor.dbms.postgres.planner import (
     PostgresPlannerSession,
     PostgresStatisticsConfiguration,
 )
+from extstats_advisor.dbms.postgres.profiling import profile_postgres_singletons
 from extstats_advisor.dbms.postgres.sandbox import (
     POSTGRES_PLANNER_SANDBOX_CONTRACT,
     PostgresSandboxMetadata,
@@ -56,5 +57,6 @@ __all__ = [
     "materialize_native_stats",
     "materialize_postgresql_native_stats",
     "prepare_postgres_planner_sandbox",
+    "profile_postgres_singletons",
     "verify_postgres_planner_sandbox",
 ]

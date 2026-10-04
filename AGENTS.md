@@ -45,20 +45,23 @@ Mandatory invariants:
     non-semantic; DBMS identity, consistency, semantic provenance, and
     sensitivity are semantic.
 
-Candidate generation is structural only. Keep these stages distinct:
+Candidate generation and singleton utility profiling are separate stages. Keep
+these stages distinct:
 
 - generation: workload-derived relevant groups and backend capability expansion;
 - static catalog order: deterministic artifact/tie-break order only;
-- ranking: later singleton utility over all generated candidates;
+- singleton profiling: baseline and every PRESENT singleton utility;
+- ranking: later use of the frozen singleton precedence;
 - screening: later optimizer-budget restriction after ranking.
 
 Static catalog precedence is not the final planner-visible PostgreSQL statistics
-order. Later singleton profiling will derive that order. Candidate generation
-contains no utility score, top-K restriction, search, recommendation, or
-deployment.
+order. Singleton profiling freezes a deterministic utility precedence by exact
+improvement, static rank, and candidate ID. It does not apply a budget or
+choose a deployment. Candidate generation and singleton profiling contain no
+top-K restriction, search, recommendation, or deployment.
 
 Current scope includes PostgreSQL snapshot acquisition, an explicit
 production-exact GroundTruthSet utility reference, offline candidate
-generation, and the sample-only planner sandbox. Singleton profiling, ranking,
-screening, search, parallel pools, deployment, and maintenance budgeting
-remain excluded.
+generation, the sample-only planner sandbox, and singleton utility profiling
+with a frozen precedence artifact. Screening, search, parallel pools,
+deployment, and maintenance budgeting remain excluded.
