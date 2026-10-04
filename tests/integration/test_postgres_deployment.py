@@ -18,7 +18,14 @@ from extstats_advisor.optimization.singleton import (
     CandidateSingletonProfile,
     SingletonProfile,
 )
-from extstats_advisor.snapshot.model import ColumnSchema, DBMSIdentity, RelationName, RelationSchema
+from extstats_advisor.snapshot.model import (
+    ColumnSchema,
+    DBMSIdentity,
+    RelationName,
+    RelationSchema,
+    Workload,
+    WorkloadQuery,
+)
 from extstats_advisor.utility.model import PerQueryUtility, UtilityResult
 
 pytestmark = pytest.mark.integration
@@ -164,6 +171,15 @@ def test_stock_postgres_deployment_is_transactional_and_add_only(
         AcquisitionRequest(
             '"Reporting.Schema"."Order Facts"',
             SamplePolicy(8, seed=17),
+        ),
+        Workload(
+            "deployment-workload",
+            (
+                WorkloadQuery(
+                    "q1",
+                    'SELECT "Customer ID" FROM "Reporting.Schema"."Order Facts"',
+                ),
+            ),
         ),
     )
     profile = _profile()
