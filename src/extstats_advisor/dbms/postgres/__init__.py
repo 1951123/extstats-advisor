@@ -26,6 +26,12 @@ from extstats_advisor.dbms.postgres.planner import (
     PostgresStatisticsConfiguration,
 )
 from extstats_advisor.dbms.postgres.profiling import profile_postgres_singletons
+from extstats_advisor.dbms.postgres.recommendation import (
+    build_postgres_recommendation,
+    postgres_statistics_object_name,
+    quote_postgresql_identifier,
+    render_postgres_sql,
+)
 from extstats_advisor.dbms.postgres.sandbox import (
     POSTGRES_PLANNER_SANDBOX_CONTRACT,
     PostgresSandboxMetadata,
@@ -53,12 +59,16 @@ __all__ = [
     "SamplingResourceLimitError",
     "UnsupportedPostgresTypeError",
     "UnsupportedRelationError",
+    "build_postgres_recommendation",
     "capture_snapshot",
     "destroy_postgres_planner_sandbox",
     "materialize_native_stats",
     "materialize_postgresql_native_stats",
+    "postgres_statistics_object_name",
     "prepare_postgres_planner_sandbox",
     "profile_postgres_singletons",
+    "quote_postgresql_identifier",
+    "render_postgres_sql",
     "search_postgres_greedy_add",
     "verify_postgres_planner_sandbox",
 ]

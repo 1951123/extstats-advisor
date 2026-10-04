@@ -87,3 +87,11 @@ class SearchBudgetExpired(SearchError):
 
 class SearchResultValidationError(SearchError):
     """Raised when a SearchResult artifact is malformed or incompatible."""
+
+
+class RecommendationError(ExtStatsAdvisorError):
+    """Raised when a deployment recommendation cannot be built safely."""
+
+
+class RecommendationValidationError(RecommendationError):
+    """Raised when a deployment recommendation artifact is malformed or incompatible."""

@@ -45,12 +45,6 @@ SingletonProfile v1 + OptimizationBudget v1
     v
 OptimizationPlan v1 -> screened frozen prefix
 
-    v
-Greedy ADD SearchResult v1
-
-The production optimization pipeline is therefore:
-
-```text
 CandidateUniverse
  -> NativeStatsRepository
  -> PlannerSandbox
@@ -58,12 +52,14 @@ CandidateUniverse
  -> SingletonProfile
  -> OptimizationPlan
  -> Greedy ADD SearchResult
+ -> Statistics Recommendation
 ```
 
 Search v1 is serial and consumes one verified planner session. Parallel
-workers, DROP/SWAP moves, deployment recommendations, and maintenance budgets
-remain outside this stage.
-```
+workers, DROP/SWAP moves, deployment execution, and maintenance budgets remain
+outside the search stage. Recommendation is a separate pure consuming stage:
+it derives desired PostgreSQL state and review-only DDL without connecting to
+the production database.
 
 The implementation includes the sealed snapshot contract, typed Arrow sample
 serialization, validation, inspection, and a first PostgreSQL source

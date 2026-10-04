@@ -64,6 +64,7 @@ Current scope includes PostgreSQL snapshot acquisition, an explicit
 production-exact GroundTruthSet utility reference, offline candidate
 generation, the sample-only planner sandbox, singleton utility profiling with
 a frozen precedence artifact, pure budgeted OptimizationPlan screening, and
-serial budgeted greedy ADD SearchResult production search. Parallel pools,
-DROP/SWAP search, recommendation, deployment, and maintenance budgeting remain
+serial budgeted greedy ADD SearchResult production search, plus pure desired
+state Recommendation artifact construction. Parallel pools, DROP/SWAP search,
+deployment preflight/execution/verification, and maintenance budgeting remain
 excluded.

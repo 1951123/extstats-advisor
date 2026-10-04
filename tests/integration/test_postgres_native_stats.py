@@ -13,6 +13,10 @@ from extstats_advisor.dbms.postgres.planner import (
     PostgresStatisticsConfiguration,
 )
 from extstats_advisor.dbms.postgres.profiling import profile_postgres_singletons
+from extstats_advisor.dbms.postgres.recommendation import (
+    build_postgres_recommendation,
+    render_postgres_sql,
+)
 from extstats_advisor.dbms.postgres.sandbox import (
     destroy_postgres_planner_sandbox,
     prepare_postgres_planner_sandbox,
@@ -50,6 +54,10 @@ from extstats_advisor.optimization.search_artifact import (
     load_search_result,
     validate_search_result,
     write_search_result,
+)
+from extstats_advisor.recommendation.artifact import (
+    validate_recommendation,
+    write_recommendation,
 )
 from extstats_advisor.snapshot.bundle import load_snapshot, write_snapshot
 from extstats_advisor.snapshot.model import (
@@ -353,6 +361,45 @@ def test_patched_planner_sandbox_is_catalogless_ordered_and_isolated(
     )
     assert best_singleton.candidate_id == mcv.candidate_id
     assert first_result.accepted_moves[0].added_candidate_id == mcv.candidate_id
+
+    recommendation = build_postgres_recommendation(
+        snapshot, universe, repository, first_profile, loaded_plan, first_result
+    )
+    second_recommendation = build_postgres_recommendation(
+        snapshot, universe, repository, first_profile, loaded_plan, second_result
+    )
+    assert recommendation.computed_semantic_digest == second_recommendation.computed_semantic_digest
+    assert recommendation.selected_candidate_ids == first_result.final_ordered_candidate_ids
+    assert recommendation.deployment_ordered_candidate_ids == tuple(
+        candidate_id
+        for candidate_id in first_profile.frozen_ordered_candidate_ids
+        if candidate_id in set(first_result.final_ordered_candidate_ids)
+    )
+    profile_by_id = {
+        candidate.candidate_id: candidate for candidate in first_profile.candidate_profiles
+    }
+    assert all(
+        profile_by_id[candidate_id].native_state == "present"
+        for candidate_id in recommendation.selected_candidate_ids
+    )
+    assert all(
+        item.statistics_target == repository.statistics_target
+        for item in recommendation.selected_candidates
+    )
+    assert len(recommendation.ddl_plan) == len(recommendation.selected_candidates) * 2 + 1
+    assert render_postgres_sql(recommendation).endswith('ANALYZE "public"."Scratch Table";\n')
+    recommendation_path = tmp_path / "recommendation-v1.json"
+    write_recommendation(recommendation, recommendation_path)
+    validate_recommendation(
+        recommendation_path,
+        snapshot,
+        universe,
+        repository,
+        loaded_truth,
+        first_profile,
+        loaded_plan,
+        first_result,
+    )
 
     with psycopg.connect(patched_postgres_dsn, autocommit=True) as connection:
         assert (

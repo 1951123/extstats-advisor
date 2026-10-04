@@ -20,9 +20,11 @@ from extstats_advisor.dbms.postgres import (
     PostgresPlannerSession,
     PostgresSnapshotAcquirer,
     PostgresStatisticsConfiguration,
+    build_postgres_recommendation,
     destroy_postgres_planner_sandbox,
     prepare_postgres_planner_sandbox,
     profile_postgres_singletons,
+    render_postgres_sql,
     search_postgres_greedy_add,
     verify_postgres_planner_sandbox,
 )
@@ -49,8 +51,15 @@ from extstats_advisor.optimization.plan_artifact import (
 )
 from extstats_advisor.optimization.search_artifact import (
     inspect_search_result,
+    load_search_result,
     validate_search_result,
     write_search_result,
+)
+from extstats_advisor.recommendation.artifact import (
+    inspect_recommendation,
+    load_recommendation,
+    validate_recommendation,
+    write_recommendation,
 )
 from extstats_advisor.snapshot.bundle import load_snapshot, validate_snapshot, write_snapshot
 from extstats_advisor.utility import QErrorLoss, WeightedWorkloadUtility
@@ -195,6 +204,36 @@ def _parser() -> argparse.ArgumentParser:
     validate_search.add_argument("--optimization-plan", required=True, type=Path)
     inspect_search = search_commands.add_parser("inspect")
     inspect_search.add_argument("search_result", type=Path)
+    recommendation = commands.add_parser("recommendation")
+    recommendation_commands = recommendation.add_subparsers(
+        dest="recommendation_command", required=True
+    )
+    build_recommendation = recommendation_commands.add_parser("build")
+    build_backend = build_recommendation.add_subparsers(
+        dest="recommendation_backend", required=True
+    )
+    build_postgres = build_backend.add_parser("postgres")
+    build_postgres.add_argument("snapshot", type=Path)
+    build_postgres.add_argument("candidate_universe", type=Path)
+    build_postgres.add_argument("native_repository", type=Path)
+    build_postgres.add_argument("ground_truth", type=Path)
+    build_postgres.add_argument("singleton_profile", type=Path)
+    build_postgres.add_argument("optimization_plan", type=Path)
+    build_postgres.add_argument("search_result", type=Path)
+    build_postgres.add_argument("--output", required=True, type=Path)
+    validate_recommendation_command = recommendation_commands.add_parser("validate")
+    validate_recommendation_command.add_argument("recommendation", type=Path)
+    validate_recommendation_command.add_argument("--snapshot", required=True, type=Path)
+    validate_recommendation_command.add_argument("--candidate-universe", required=True, type=Path)
+    validate_recommendation_command.add_argument("--native-repository", required=True, type=Path)
+    validate_recommendation_command.add_argument("--ground-truth", required=True, type=Path)
+    validate_recommendation_command.add_argument("--singleton-profile", required=True, type=Path)
+    validate_recommendation_command.add_argument("--optimization-plan", required=True, type=Path)
+    validate_recommendation_command.add_argument("--search-result", required=True, type=Path)
+    inspect_recommendation_command = recommendation_commands.add_parser("inspect")
+    inspect_recommendation_command.add_argument("recommendation", type=Path)
+    sql_recommendation = recommendation_commands.add_parser("sql")
+    sql_recommendation.add_argument("recommendation", type=Path)
     return parser
 
 
@@ -386,6 +425,85 @@ def main(argv: list[str] | None = None) -> int:
                         "status": "profiled",
                         "output": str(args.output),
                         **inspect_singleton_profile(args.output),
+                        "semantic_digest": digest,
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
+        if args.command == "recommendation":
+            if args.recommendation_command == "inspect":
+                print(
+                    json.dumps(
+                        inspect_recommendation(args.recommendation), sort_keys=True, indent=2
+                    )
+                )
+                return 0
+            if args.recommendation_command == "sql":
+                print(render_postgres_sql(load_recommendation(args.recommendation)), end="")
+                return 0
+            snapshot = load_snapshot(args.snapshot)
+            universe = load_candidate_universe(args.candidate_universe, snapshot)
+            repository = load_native_stats_repository(args.native_repository)
+            ground_truth = load_ground_truth_set(args.ground_truth, snapshot)
+            singleton_profile = load_singleton_profile(args.singleton_profile)
+            optimization_plan = load_optimization_plan(args.optimization_plan)
+            search_result = load_search_result(args.search_result)
+            validate_singleton_profile(
+                args.singleton_profile, snapshot, universe, repository, ground_truth
+            )
+            validate_optimization_plan(
+                args.optimization_plan,
+                snapshot,
+                universe,
+                repository,
+                ground_truth,
+                singleton_profile,
+            )
+            validate_search_result(
+                args.search_result,
+                snapshot,
+                universe,
+                repository,
+                ground_truth,
+                singleton_profile,
+                optimization_plan,
+            )
+            if args.recommendation_command == "validate":
+                print(
+                    json.dumps(
+                        {
+                            "status": "valid",
+                            **validate_recommendation(
+                                args.recommendation,
+                                snapshot,
+                                universe,
+                                repository,
+                                ground_truth,
+                                singleton_profile,
+                                optimization_plan,
+                                search_result,
+                            ),
+                        },
+                        sort_keys=True,
+                    )
+                )
+                return 0
+            recommendation = build_postgres_recommendation(
+                snapshot,
+                universe,
+                repository,
+                singleton_profile,
+                optimization_plan,
+                search_result,
+            )
+            digest = write_recommendation(recommendation, args.output)
+            print(
+                json.dumps(
+                    {
+                        "status": "built",
+                        "output": str(args.output),
+                        **inspect_recommendation(args.output),
                         "semantic_digest": digest,
                     },
                     sort_keys=True,
