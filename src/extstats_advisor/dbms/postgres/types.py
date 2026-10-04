@@ -126,6 +126,33 @@ def map_postgres_type(
     raise UnsupportedPostgresTypeError(f"unsupported PostgreSQL type {native_type!r}")
 
 
+def validate_native_type_for_ddl(native_type: str) -> str:
+    """Return only a known-safe scalar type spelling for scratch-table DDL."""
+
+    map_postgres_type(native_type)
+    if native_type in {
+        "boolean",
+        "smallint",
+        "integer",
+        "bigint",
+        "real",
+        "double precision",
+        "text",
+        "name",
+        "bytea",
+        "date",
+        "timestamp without time zone",
+        "timestamp with time zone",
+        "uuid",
+    }:
+        return native_type
+    if _VARCHAR.fullmatch(native_type) or _CHAR.fullmatch(native_type):
+        return native_type
+    if _NUMERIC.fullmatch(native_type):
+        return native_type
+    raise UnsupportedPostgresTypeError(f"unsupported PostgreSQL DDL type {native_type!r}")
+
+
 def convert_row(row: tuple[Any, ...], mappings: tuple[PostgresTypeMapping, ...]) -> tuple[Any, ...]:
     if len(row) != len(mappings):
         raise UnsupportedPostgresTypeError("PostgreSQL row width does not match extracted schema")

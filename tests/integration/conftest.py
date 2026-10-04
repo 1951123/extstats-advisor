@@ -21,6 +21,7 @@ def postgres_capture_dsn() -> str:
 
     with psycopg.connect(admin_dsn, autocommit=True) as connection:
         connection.execute('DROP SCHEMA IF EXISTS "Reporting.Schema" CASCADE')
+
         connection.execute(
             """
             DO $do$
@@ -89,3 +90,22 @@ def postgres_capture_dsn() -> str:
     yield capture_dsn
     with psycopg.connect(admin_dsn, autocommit=True) as connection:
         connection.execute('DROP SCHEMA IF EXISTS "Reporting.Schema" CASCADE')
+
+
+@pytest.fixture(scope="session")
+def patched_postgres_dsn() -> str:
+    dsn = os.environ.get("EXTSTATS_ADVISOR_TEST_PATCHED_POSTGRES_DSN")
+    if not dsn:
+        pytest.skip(
+            "set EXTSTATS_ADVISOR_TEST_PATCHED_POSTGRES_DSN for patched PostgreSQL integration"
+        )
+    try:
+        import psycopg
+    except ImportError:
+        pytest.skip("install extstats-advisor[postgres] for PostgreSQL integration")
+    try:
+        with psycopg.connect(dsn, autocommit=True) as connection:
+            connection.execute("SELECT 1")
+    except psycopg.Error as exc:
+        pytest.skip(f"patched PostgreSQL is unavailable: {exc}")
+    return dsn

@@ -46,3 +46,39 @@ jobs:
         env:
           EXTSTATS_ADVISOR_TEST_POSTGRES_ADMIN_DSN: postgresql://postgres:postgres@localhost:5432/postgres
           EXTSTATS_ADVISOR_TEST_POSTGRES_DSN: postgresql://extstats_capture:capture-secret@localhost:5432/postgres
+
+  patched-postgres-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install patched PostgreSQL build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential flex bison
+      - name: Build reference patched PostgreSQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/1951123/postgresql-pgextadv.git .patched-postgresql
+          git -C .patched-postgresql checkout 6d7f5c9cd6cf1b0f73e84a4bacc45a31d1cb0cd6
+          cd .patched-postgresql
+          ./configure --prefix="$GITHUB_WORKSPACE/.pgextadv" --without-readline --without-zlib
+          make -j2
+          make install
+      - name: Start patched PostgreSQL 16.14
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$GITHUB_WORKSPACE/.pgextadv/bin/initdb" -D "$GITHUB_WORKSPACE/.pgdata" --auth=trust --no-locale
+          "$GITHUB_WORKSPACE/.pgextadv/bin/pg_ctl" -D "$GITHUB_WORKSPACE/.pgdata" \
+            -o "-p 55438" -l "$GITHUB_WORKSPACE/.pglog" -w start
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e '.[dev,postgres]'
+      - name: Run patched PostgreSQL integration
+        run: pytest -m patched_integration
+        env:
+          EXTSTATS_ADVISOR_TEST_PATCHED_POSTGRES_DSN: postgresql://postgres@localhost:55438/postgres
+      - name: Stop patched PostgreSQL
+        if: always()
+        run: "$GITHUB_WORKSPACE/.pgextadv/bin/pg_ctl" -D "$GITHUB_WORKSPACE/.pgdata" -m fast -w stop

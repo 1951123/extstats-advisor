@@ -22,7 +22,10 @@ packages = ["src/extstats_advisor"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
-markers = ["integration: tests requiring a live stock PostgreSQL server"]
+markers = [
+  "integration: tests requiring a live stock PostgreSQL server",
+  "patched_integration: tests requiring the reference patched PostgreSQL server",
+]
 
 [tool.ruff]
 target-version = "py312"

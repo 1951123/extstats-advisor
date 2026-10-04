@@ -19,3 +19,11 @@ class CandidateGenerationError(ExtStatsAdvisorError):
 
 class CandidateUniverseValidationError(CandidateGenerationError):
     """Raised when a candidate-universe artifact is malformed or inconsistent."""
+
+
+class NativeStatsMaterializationError(ExtStatsAdvisorError):
+    """Raised when patched PostgreSQL cannot materialize native statistics safely."""
+
+
+class NativeStatsRepositoryValidationError(NativeStatsMaterializationError):
+    """Raised when a native-statistics repository is malformed or inconsistent."""
