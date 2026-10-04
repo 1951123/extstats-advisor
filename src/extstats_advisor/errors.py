@@ -109,5 +109,9 @@ class DeploymentMutationError(DeploymentError):
     """Raised when a transactional deployment fails before commit."""
 
 
+class DeploymentCommitOutcomeUnknownError(DeploymentError):
+    """Raised when COMMIT did not prove whether the mutation was committed."""
+
+
 class DeploymentCommittedButUnverifiedError(DeploymentError):
     """Raised when COMMIT succeeded but post-commit verification failed."""

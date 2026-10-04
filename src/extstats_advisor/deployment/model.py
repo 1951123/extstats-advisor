@@ -162,10 +162,21 @@ class DeploymentResult:
             not isinstance(value, DeployedObject) for value in self.deployed_objects
         ):
             raise DeploymentValidationError("deployed objects are invalid")
+        oids = tuple(value.oid for value in self.deployed_objects)
+        if len(oids) != len(set(oids)):
+            raise DeploymentValidationError("deployed object OIDs must be unique")
         if tuple(value.deployment_order_position for value in self.deployed_objects) != tuple(
             range(1, len(self.deployed_objects) + 1)
         ):
             raise DeploymentValidationError("deployed object positions are invalid")
+        if (
+            tuple(
+                value.candidate_id
+                for value in sorted(self.deployed_objects, key=lambda item: item.oid)
+            )
+            != self.deployment_ordered_candidate_ids
+        ):
+            raise DeploymentValidationError("deployed object OID order is inconsistent")
         if (
             tuple(value.candidate_id for value in self.deployed_objects)
             != self.deployment_ordered_candidate_ids

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import re
+from contextlib import suppress
 from typing import Any
 
 from extstats_advisor.dbms.postgres.recommendation import build_postgres_recommendation
 from extstats_advisor.deployment.model import DEPLOYMENT_POLICY, DeployedObject, DeploymentResult
 from extstats_advisor.errors import (
+    DeploymentCommitOutcomeUnknownError,
     DeploymentCommittedButUnverifiedError,
     DeploymentMutationError,
     DeploymentValidationError,
@@ -511,6 +513,12 @@ def _no_change_result(
     )
 
 
+def _close_after_commit(connection: Any) -> None:
+    # COMMIT already returned successfully; close errors do not change that fact.
+    with suppress(Exception):
+        connection.close()
+
+
 def deploy_postgres_recommendation(
     dsn: str | None,
     snapshot: Any,
@@ -550,6 +558,15 @@ def deploy_postgres_recommendation(
     deployed_objects: tuple[DeployedObject, ...]
     try:
         connection.execute("BEGIN")
+    except Exception as exc:
+        try:
+            connection.rollback()
+        finally:
+            connection.close()
+        raise DeploymentMutationError(
+            "could not begin transactional PostgreSQL deployment"
+        ) from exc
+    try:
         preflight_summary = _preflight_locked(
             connection,
             snapshot,
@@ -570,7 +587,6 @@ def deploy_postgres_recommendation(
             connection, recommendation, relation_oid, require_payload=True
         ):
             raise DeploymentMutationError("pre-commit deployed object verification was unstable")
-        connection.commit()
     except Exception as exc:
         try:
             connection.rollback()
@@ -581,7 +597,15 @@ def deploy_postgres_recommendation(
         if isinstance(exc, DeploymentMutationError):
             raise
         raise DeploymentMutationError("transactional PostgreSQL deployment failed") from exc
-    connection.close()
+    try:
+        connection.commit()
+    except Exception as exc:
+        _close_after_commit(connection)
+        raise DeploymentCommitOutcomeUnknownError(
+            "COMMIT did not return successful confirmation; deployment outcome is unknown and "
+            "manual/live verification is required"
+        ) from exc
+    _close_after_commit(connection)
     try:
         _post_commit_verify(dsn, snapshot, recommendation, deployed_objects, relation_oid)
     except Exception as exc:

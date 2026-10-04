@@ -52,6 +52,17 @@ Every pre-commit error rolls back and terminates the mutation connection. If
 COMMIT succeeds but the fresh post-commit verification fails, deployment raises
 an explicit committed-but-unverified error and writes no success artifact.
 
+Deployment distinguishes three failure phases:
+
+1. **Pre-COMMIT failure:** the transaction is rolled back and the mutation is
+   not committed.
+2. **COMMIT confirmation failure:** COMMIT did not return successful
+   confirmation; the outcome is unknown. Cleanup does not prove rollback, no
+   success artifact is written, and manual/live inspection is required.
+3. **Confirmed COMMIT, post-COMMIT verification failure:** the mutation is
+   committed but unverified. No rollback is attempted or claimed; manual DBA
+   inspection is required and no success artifact is written.
+
 A `no-change` Recommendation performs source validation only: it opens no
 production connection, issues no DDL or ANALYZE, and produces a deterministic
 no-op result.

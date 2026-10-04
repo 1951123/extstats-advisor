@@ -212,6 +212,78 @@ def validate_deployment_result(
             raise DeploymentValidationError("deployment order does not match Recommendation")
         if result.decision != recommendation.decision:
             raise DeploymentValidationError("deployment decision does not match Recommendation")
+        target = recommendation.target_relation
+        if (
+            result.target_catalog != target.catalog
+            or result.target_schema != target.schema
+            or result.target_relation != target.name
+        ):
+            raise DeploymentValidationError("deployment target does not match Recommendation")
+        if recommendation.decision == "no-change":
+            if (
+                result.target_relation_oid is not None
+                or result.commit_status != "not-required"
+                or result.deployed_objects
+                or result.deployment_ordered_candidate_ids
+            ):
+                raise DeploymentValidationError(
+                    "no-change deployment result contains production state"
+                )
+        else:
+            expected_candidates = recommendation.selected_candidates
+            if len(result.deployed_objects) != len(expected_candidates):
+                raise DeploymentValidationError(
+                    "deployed object count does not match Recommendation membership"
+                )
+            for expected_candidate, actual_object in zip(
+                expected_candidates, result.deployed_objects, strict=True
+            ):
+                expected_fields = (
+                    expected_candidate.candidate_id,
+                    expected_candidate.statistics_object.schema,
+                    expected_candidate.statistics_object.name,
+                    expected_candidate.kind,
+                    expected_candidate.column_ordinals,
+                    expected_candidate.statistics_target,
+                    expected_candidate.deployment_order_position,
+                )
+                actual_fields = (
+                    actual_object.candidate_id,
+                    actual_object.schema,
+                    actual_object.name,
+                    actual_object.kind,
+                    actual_object.column_ordinals,
+                    actual_object.statistics_target,
+                    actual_object.deployment_order_position,
+                )
+                if actual_fields != expected_fields:
+                    raise DeploymentValidationError(
+                        f"deployed object mapping differs for {expected_candidate.candidate_id}"
+                    )
+                if not actual_object.payload_verified or actual_object.oid < 1:
+                    raise DeploymentValidationError(
+                        f"deployed object evidence is invalid for {expected_candidate.candidate_id}"
+                    )
+            if len({item.oid for item in result.deployed_objects}) != len(result.deployed_objects):
+                raise DeploymentValidationError("deployed object OIDs are not unique")
+            if tuple(
+                item.candidate_id
+                for item in sorted(result.deployed_objects, key=lambda item: item.oid)
+            ) != tuple(recommendation.deployment_ordered_candidate_ids):
+                raise DeploymentValidationError(
+                    "recorded deployed OID order differs from Recommendation"
+                )
+            if result.target_relation_oid is None or result.target_relation_oid < 1:
+                raise DeploymentValidationError("successful deployment has no relation OID")
+        if native_repository is not None:
+            if result.server_version != recommendation.dbms_source_version:
+                raise DeploymentValidationError(
+                    "deployment server version differs from Recommendation"
+                )
+            if result.server_version_num != native_repository.server_version_num:
+                raise DeploymentValidationError(
+                    "deployment server version number differs from source"
+                )
         for label, actual, expected in (
             (
                 "snapshot",

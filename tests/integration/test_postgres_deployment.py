@@ -5,10 +5,15 @@ from types import SimpleNamespace
 
 import pytest
 
+import extstats_advisor.dbms.postgres.deployment as deployment_module
 from extstats_advisor.dbms.base import AcquisitionRequest, SamplePolicy
 from extstats_advisor.dbms.postgres import PostgresSnapshotAcquirer
 from extstats_advisor.dbms.postgres.deployment import deploy_postgres_recommendation
-from extstats_advisor.dbms.postgres.recommendation import build_postgres_recommendation
+from extstats_advisor.dbms.postgres.recommendation import (
+    build_postgres_recommendation,
+    postgres_statistics_object_name,
+)
+from extstats_advisor.errors import DeploymentMutationError, DeploymentValidationError
 from extstats_advisor.native_stats.model import PRESENT, NativeStatsCandidate
 from extstats_advisor.optimization.plan import create_optimization_plan
 from extstats_advisor.optimization.search import PlannerIdentity, greedy_add_search
@@ -155,19 +160,30 @@ def _source_seeds(profile):
     return snapshot, universe, repository
 
 
-def test_stock_postgres_deployment_is_transactional_and_add_only(
-    postgres_capture_dsn: str, postgres_admin_dsn: str
-) -> None:
+def _clean_deployment_objects(admin_dsn: str) -> None:
     import psycopg
 
-    with psycopg.connect(postgres_admin_dsn, autocommit=True) as connection:
-        connection.execute(
-            'CREATE STATISTICS "Reporting.Schema"."external_before" (mcv) '
-            'ON "Customer ID", "Small Value" FROM "Reporting.Schema"."Order Facts"'
-        )
-        connection.execute('ANALYZE "Reporting.Schema"."Order Facts"')
+    names = {
+        "external_before",
+        "external_collision",
+        *(
+            postgres_statistics_object_name(candidate_id, kind)
+            for candidate_id, kind in (
+                ("A", "postgresql.mcv"),
+                ("B", "postgresql.dependencies"),
+                ("C", "postgresql.mcv"),
+            )
+        ),
+    }
+    with psycopg.connect(admin_dsn, autocommit=True) as connection:
+        for name in names:
+            connection.execute(f'DROP STATISTICS IF EXISTS "Reporting.Schema"."{name}"')
 
-    live_snapshot = PostgresSnapshotAcquirer(postgres_capture_dsn).capture(
+
+def _live_deployment_context(capture_dsn: str, admin_dsn: str):
+    import psycopg
+
+    live_snapshot = PostgresSnapshotAcquirer(capture_dsn).capture(
         AcquisitionRequest(
             '"Reporting.Schema"."Order Facts"',
             SamplePolicy(8, seed=17),
@@ -185,7 +201,7 @@ def test_stock_postgres_deployment_is_transactional_and_add_only(
     profile = _profile()
     plan = create_optimization_plan(profile, candidate_limit=3)
     search_result = _search(profile, plan)
-    _, universe_seed, repository_seed = _source_seeds(profile)
+    _, universe, repository_seed = _source_seeds(profile)
     relation = replace(live_snapshot.schemas[0], relation_id="rel")
     snapshot = replace(
         live_snapshot,
@@ -194,25 +210,17 @@ def test_stock_postgres_deployment_is_transactional_and_add_only(
         samples={"rel": live_snapshot.samples[live_snapshot.schemas[0].relation_id]},
         semantic_digest=profile.source_snapshot_semantic_digest,
     )
-    universe = universe_seed
-    repository_candidates = repository_seed.candidate_models
-    with psycopg.connect(postgres_admin_dsn, autocommit=True) as connection:
+    with psycopg.connect(admin_dsn, autocommit=True) as connection:
         server_version = str(connection.execute("SHOW server_version").fetchone()[0])
         server_version_num = int(connection.execute("SHOW server_version_num").fetchone()[0])
     repository_values = dict(repository_seed.__dict__)
-    repository_values.update(
-        candidate_models=repository_candidates,
-        server_version=server_version,
-        server_version_num=server_version_num,
-    )
+    repository_values.update(server_version=server_version, server_version_num=server_version_num)
     repository = SimpleNamespace(**repository_values)
     ground_truth = SimpleNamespace(semantic_digest=profile.ground_truth_semantic_digest)
     recommendation = build_postgres_recommendation(
         snapshot, universe, repository, profile, plan, search_result
     )
-
-    result = deploy_postgres_recommendation(
-        postgres_admin_dsn,
+    source_args = (
         snapshot,
         universe,
         repository,
@@ -220,6 +228,28 @@ def test_stock_postgres_deployment_is_transactional_and_add_only(
         profile,
         plan,
         search_result,
+    )
+    return source_args, recommendation
+
+
+def test_stock_postgres_deployment_is_transactional_and_add_only(
+    postgres_capture_dsn: str, postgres_admin_dsn: str
+) -> None:
+    import psycopg
+
+    _clean_deployment_objects(postgres_admin_dsn)
+    with psycopg.connect(postgres_admin_dsn, autocommit=True) as connection:
+        connection.execute(
+            'CREATE STATISTICS "Reporting.Schema"."external_before" (mcv) '
+            'ON "Customer ID", "Small Value" FROM "Reporting.Schema"."Order Facts"'
+        )
+        connection.execute('ANALYZE "Reporting.Schema"."Order Facts"')
+
+    source_args, recommendation = _live_deployment_context(postgres_capture_dsn, postgres_admin_dsn)
+
+    result = deploy_postgres_recommendation(
+        postgres_admin_dsn,
+        *source_args,
         recommendation,
         lock_timeout_ms=5_000,
         statement_timeout_ms=30_000,
@@ -230,7 +260,7 @@ def test_stock_postgres_deployment_is_transactional_and_add_only(
     assert result.preflight_summary["existing_external_statistics_names"] == [
         "Reporting.Schema.external_before"
     ]
-    assert result.preflight_summary["server_version_num"] == server_version_num
+    assert result.preflight_summary["server_version_num"] == source_args[2].server_version_num
     assert [item.candidate_id for item in result.deployed_objects] == ["A", "B", "C"]
     assert (
         result.deployed_objects[0].oid
@@ -248,3 +278,76 @@ def test_stock_postgres_deployment_is_transactional_and_add_only(
     names = {str(row[0]) for row in rows}
     assert "external_before" in names
     assert {item.name for item in result.deployed_objects} <= names
+
+
+def test_stock_postgres_deterministic_name_collision_fails_closed(
+    postgres_capture_dsn: str, postgres_admin_dsn: str
+) -> None:
+    import psycopg
+
+    _clean_deployment_objects(postgres_admin_dsn)
+    source_args, recommendation = _live_deployment_context(postgres_capture_dsn, postgres_admin_dsn)
+    colliding_name = recommendation.selected_candidates[0].statistics_object.name
+    with psycopg.connect(postgres_admin_dsn, autocommit=True) as connection:
+        connection.execute(
+            f'CREATE STATISTICS "Reporting.Schema"."{colliding_name}" (mcv) '
+            'ON "Customer ID", "Small Value" FROM "Reporting.Schema"."Order Facts"'
+        )
+        connection.execute(
+            'CREATE STATISTICS "Reporting.Schema"."external_collision" (mcv) '
+            'ON "Customer ID", "Integer Value" FROM "Reporting.Schema"."Order Facts"'
+        )
+
+    with pytest.raises(DeploymentValidationError, match="deterministic.*collision"):
+        deploy_postgres_recommendation(postgres_admin_dsn, *source_args, recommendation)
+
+    with psycopg.connect(postgres_admin_dsn, autocommit=True) as connection:
+        rows = connection.execute(
+            "SELECT e.stxname FROM pg_catalog.pg_statistic_ext AS e "
+            "JOIN pg_catalog.pg_namespace AS n ON n.oid = e.stxnamespace "
+            "WHERE n.nspname = %s",
+            ("Reporting.Schema",),
+        ).fetchall()
+    names = {str(row[0]) for row in rows}
+    assert colliding_name in names
+    assert "external_collision" in names
+    assert {
+        candidate.statistics_object.name for candidate in recommendation.selected_candidates[1:]
+    }.isdisjoint(names)
+
+
+def test_stock_postgres_precommit_failure_rolls_back_created_statistics(
+    postgres_capture_dsn: str, postgres_admin_dsn: str, monkeypatch
+) -> None:
+    import psycopg
+
+    _clean_deployment_objects(postgres_admin_dsn)
+    with psycopg.connect(postgres_admin_dsn, autocommit=True) as connection:
+        connection.execute(
+            'CREATE STATISTICS "Reporting.Schema"."external_before" (mcv) '
+            'ON "Customer ID", "Small Value" FROM "Reporting.Schema"."Order Facts"'
+        )
+    source_args, recommendation = _live_deployment_context(postgres_capture_dsn, postgres_admin_dsn)
+    real_reader = deployment_module._read_managed_objects
+
+    def fail_after_analyze(connection, current_recommendation, relation_oid, *, require_payload):
+        if require_payload:
+            raise RuntimeError("forced pre-commit verification failure")
+        return real_reader(connection, current_recommendation, relation_oid, require_payload=False)
+
+    monkeypatch.setattr(deployment_module, "_read_managed_objects", fail_after_analyze)
+    with pytest.raises(DeploymentMutationError, match="transactional"):
+        deploy_postgres_recommendation(postgres_admin_dsn, *source_args, recommendation)
+
+    with psycopg.connect(postgres_admin_dsn, autocommit=True) as connection:
+        rows = connection.execute(
+            "SELECT e.stxname FROM pg_catalog.pg_statistic_ext AS e "
+            "JOIN pg_catalog.pg_namespace AS n ON n.oid = e.stxnamespace "
+            "WHERE n.nspname = %s",
+            ("Reporting.Schema",),
+        ).fetchall()
+    names = {str(row[0]) for row in rows}
+    assert "external_before" in names
+    assert {
+        candidate.statistics_object.name for candidate in recommendation.selected_candidates
+    }.isdisjoint(names)
