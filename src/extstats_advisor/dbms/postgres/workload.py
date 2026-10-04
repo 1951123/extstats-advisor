@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from typing import Any
 
@@ -15,6 +16,28 @@ from extstats_advisor.workload.analysis import (
 )
 
 _SUPPORTED_OPERATORS = {"=", "<>", "<", "<=", ">", ">="}
+
+
+def contains_parameter(query: str) -> bool:
+    """Return whether parsed PostgreSQL SQL contains an unresolved ParamRef."""
+
+    if not re.search(r"\$[1-9][0-9]*", query):
+        return False
+    try:
+        _, parse_sql, ast, _, _ = _pglast()
+
+        def walk(node: Any) -> bool:
+            if isinstance(node, ast.ParamRef):
+                return True
+            if isinstance(node, ast.Node):
+                return any(walk(getattr(node, field)) for field in node)
+            if isinstance(node, (list, tuple)):
+                return any(walk(item) for item in node)
+            return False
+
+        return walk(parse_sql(query))
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+        return True
 
 
 def _pglast() -> tuple[Any, Any, Any, Any, Any]:

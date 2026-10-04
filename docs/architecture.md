@@ -17,10 +17,9 @@ schema, table, and column strings are not reparsed or constrained by
 PostgreSQL identifier rules.
 
 ```text
-Production DB
-    | read-only snapshot acquisition
-    v
-AdvisorSnapshot (Σ, S, P, W)
+Production source view
+    +--> read-only snapshot acquisition --> AdvisorSnapshot (Σ, S, P, W)
+    +--> explicit exact truth acquisition --> GroundTruthSet (optional)
     | verify / deserialize
     v
 PostgreSQL workload analyzer
@@ -32,7 +31,13 @@ Relevant attribute groups (core)
 CandidateUniverse v1
     | native sample-only materialization / planner sandbox
     v
-Native cardinality-estimation planner sandbox and later advisor stages
+Native cardinality-estimation planner sandbox
+
+Planner configuration estimates + GroundTruthSet
+    v
+CardinalityLoss -> UtilityProvider -> objective
+
+[future] objective -> optimizer/search
 ```
 
 The implementation includes the sealed snapshot contract, typed Arrow sample
@@ -53,12 +58,18 @@ Generation, static precedence, ranking, and screening are separate stages.
 The static PostgreSQL precedence in `CandidateUniverse v1` is deterministic
 artifact ordering only, not final planner-visible statistics order.
 
-The research system is separate: `pg-extstats-benchmarks` owns datasets,
-truth, experiment protocols, ablations, and paper evaluation. The production
-core never requires exact truth.
+The production exact-truth reference is deliberately separate from
+`AdvisorSnapshot`: it is an opt-in `GroundTruthSet` captured from the same
+PostgreSQL MVCC source view, with q-error and weighted workload utility
+diagnostics. It is not a benchmark oracle, research label, or requirement for
+normal capture. The research system remains separate:
+`pg-extstats-benchmarks` owns benchmark datasets, truth, experiment protocols,
+ablations, and paper evaluation.
 
 For v1, the structured consistency declaration says that schema, population,
 and samples came from one `consistent-source-view`, while workload is supplied
 externally. The PostgreSQL backend maps this to one explicit read-only
 repeatable-read transaction without exposing transaction syntax in the
-portable artifact.
+portable artifact. When exact truth is explicitly requested, the source-view
+token is recorded as backend-specific provenance in both artifacts and all
+positive-weight supported workload counts run in that same transaction.

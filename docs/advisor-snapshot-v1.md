@@ -11,7 +11,8 @@ advisor-snapshot-v1/
 └── samples/<opaque-relation-file-id>.arrow
 ```
 
-There is no required truth component. JSON is UTF-8 canonical JSON: sorted
+There is no truth component in this artifact; optional production truth is a
+separate GroundTruthSet. JSON is UTF-8 canonical JSON: sorted
 keys, compact separators, and `allow_nan=false`. JSON component digests use
 SHA-256. Sample payload digests are binary SHA-256 values and are not claimed
 to be DBMS-independent logical-content digests.

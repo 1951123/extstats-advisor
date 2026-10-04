@@ -18,6 +18,15 @@ from extstats_advisor.dbms.postgres.sandbox import (
     verify_postgres_planner_sandbox,
 )
 from extstats_advisor.errors import PlannerSandboxValidationError
+from extstats_advisor.ground_truth import (
+    PRODUCTION_EXACT_SOURCE,
+    ArtifactGroundTruthProvider,
+    CardinalityTruth,
+    GroundTruthSet,
+    GroundTruthSource,
+    load_ground_truth_set,
+    write_ground_truth_set,
+)
 from extstats_advisor.native_stats.model import ABSENT_NATIVE, NativeStatsCandidate
 from extstats_advisor.native_stats.repository import (
     load_native_stats_repository,
@@ -35,6 +44,7 @@ from extstats_advisor.snapshot.model import (
     Workload,
     WorkloadQuery,
 )
+from extstats_advisor.utility import QErrorLoss, WeightedWorkloadUtility
 
 pytestmark = pytest.mark.patched_integration
 
@@ -79,7 +89,10 @@ def _snapshot() -> AdvisorSnapshot:
         ),
         {"rel_patched_01": table},
         DBMSIdentity("postgresql", "16.14"),
-        semantic_provenance={"acquisition": "patched integration fixture"},
+        semantic_provenance={
+            "acquisition": "patched integration fixture",
+            "source_view_token": "patched-fixture-source-view",
+        },
     )
 
 
@@ -199,6 +212,27 @@ def test_patched_planner_sandbox_is_catalogless_ordered_and_isolated(
     assert verification["physical_extstats_count"] == 0
     assert verification["autovacuum_disabled"] is True
 
+    truth_path = tmp_path / "ground-truth-v1.json"
+    truth = GroundTruthSet(
+        snapshot.semantic_digest,
+        snapshot.workload.workload_id,
+        GroundTruthSource(
+            PRODUCTION_EXACT_SOURCE,
+            "postgresql",
+            repository.server_version,
+            repository.server_version_num,
+            snapshot.semantic_provenance["source_view_token"],
+        ),
+        (CardinalityTruth("q1", 125, PRODUCTION_EXACT_SOURCE),),
+    )
+    write_ground_truth_set(truth, truth_path)
+    loaded_truth = load_ground_truth_set(truth_path, snapshot)
+    utility = WeightedWorkloadUtility(
+        snapshot.workload,
+        ArtifactGroundTruthProvider(loaded_truth),
+        QErrorLoss(),
+    )
+
     mcv = next(
         candidate
         for candidate in repository.candidate_models
@@ -215,9 +249,12 @@ def test_patched_planner_sandbox_is_catalogless_ordered_and_isolated(
     with PostgresPlannerSession(patched_postgres_dsn, snapshot, universe, repository) as session_a:
         session_a.activate(PostgresStatisticsConfiguration())
         baseline = session_a.estimate_query("q1")
+        baseline_utility = utility.evaluate({"q1": baseline.estimated_rows})
         session_a.activate(PostgresStatisticsConfiguration((mcv.candidate_id,)))
         mcv_estimate = session_a.estimate_query("q1")
+        mcv_utility = utility.evaluate({"q1": mcv_estimate.estimated_rows})
         assert mcv_estimate.estimated_rows > baseline.estimated_rows
+        assert mcv_utility.objective < baseline_utility.objective
         session_a.activate(
             PostgresStatisticsConfiguration((mcv.candidate_id, second_present.candidate_id))
         )

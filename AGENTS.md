@@ -7,11 +7,15 @@ population metadata, and representative workload.
 
 Mandatory invariants:
 
-1. Exact cardinality truth, q-error oracles, benchmark protocols, RQ drivers,
+1. Benchmark exact truth, q-error oracles, benchmark protocols, RQ drivers,
    random-order experiments, and dataset-specific ETL belong in
-   `pg-extstats-benchmarks`, not here.
+   `pg-extstats-benchmarks`, not here. Production exact cardinality truth is a
+   separate explicit opt-in artifact contract and must never enter
+   `AdvisorSnapshot v1`.
 2. Production acquisition is read-only and must not require exact `COUNT(*)`
-   or execution of every workload query by default.
+   or execution of every workload query by default. If exact truth is
+   explicitly requested, snapshot and truth queries share the same
+   repeatable-read source transaction.
 3. The realized sample is authoritative; a random seed is only provenance.
 4. Sample row count and production population cardinality are distinct.
 5. Ordinary and candidate statistics must eventually derive from the same
@@ -48,6 +52,8 @@ order. Later singleton profiling will derive that order. Candidate generation
 contains no utility score, top-K restriction, search, recommendation, or
 deployment.
 
-Current scope includes PostgreSQL snapshot acquisition and offline candidate
-generation. Planner sandboxing, native payload construction, search, parallel
-pools, deployment, and maintenance budgeting remain excluded.
+Current scope includes PostgreSQL snapshot acquisition, an explicit
+production-exact GroundTruthSet utility reference, offline candidate
+generation, and the sample-only planner sandbox. Singleton profiling, ranking,
+screening, search, parallel pools, deployment, and maintenance budgeting
+remain excluded.

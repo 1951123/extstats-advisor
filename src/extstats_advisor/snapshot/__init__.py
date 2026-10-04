@@ -1,6 +1,11 @@
 """AdvisorSnapshot v1 model and sealed-directory artifact operations."""
 
-from extstats_advisor.snapshot.bundle import load_snapshot, validate_snapshot, write_snapshot
+from extstats_advisor.snapshot.bundle import (
+    load_snapshot,
+    snapshot_semantic_digest,
+    validate_snapshot,
+    write_snapshot,
+)
 from extstats_advisor.snapshot.model import (
     AdvisorSnapshot,
     ColumnSchema,
@@ -24,6 +29,7 @@ __all__ = [
     "Workload",
     "WorkloadQuery",
     "load_snapshot",
+    "snapshot_semantic_digest",
     "validate_snapshot",
     "write_snapshot",
 ]

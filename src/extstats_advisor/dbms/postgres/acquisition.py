@@ -7,6 +7,7 @@ import math
 import secrets
 import time
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,15 @@ from extstats_advisor.dbms.postgres.schema import (
     to_relation_schema,
 )
 from extstats_advisor.dbms.postgres.types import TYPE_MAPPING_CONTRACT_VERSION, convert_row
+from extstats_advisor.dbms.postgres.workload import analyze_workload, contains_parameter
+from extstats_advisor.errors import GroundTruthAcquisitionError
+from extstats_advisor.ground_truth.model import (
+    PRODUCTION_EXACT_SOURCE,
+    CardinalityTruth,
+    GroundTruthSet,
+    GroundTruthSource,
+)
+from extstats_advisor.snapshot.bundle import snapshot_semantic_digest
 from extstats_advisor.snapshot.model import (
     AdvisorSnapshot,
     DBMSIdentity,
@@ -96,8 +106,11 @@ class PostgresSnapshotAcquirer(DBMSAcquirer):
         self._statement_timeout_ms = statement_timeout_ms
         self._batch_size = batch_size
 
-    def acquire(self, request: AcquisitionRequest) -> AcquisitionInputs:
+    def _run_acquisition(
+        self, request: AcquisitionRequest, truth_workload: Workload | None
+    ) -> tuple[AcquisitionInputs, tuple[CardinalityTruth, ...], str, str, int]:
         psycopg = _psycopg()
+        connection = None
         try:
             connection = psycopg.connect(
                 self._dsn,
@@ -108,6 +121,9 @@ class PostgresSnapshotAcquirer(DBMSAcquirer):
             raise PostgresConnectionError("could not connect to PostgreSQL") from exc
         try:
             connection.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            source_view_token = str(
+                connection.execute("SELECT pg_current_snapshot()::text").fetchone()[0]
+            )
             connection.execute(
                 "SELECT set_config('lock_timeout', %s, true)",
                 (f"{self._lock_timeout_ms}ms",),
@@ -133,25 +149,36 @@ class PostgresSnapshotAcquirer(DBMSAcquirer):
             samples, sampling_provenance = self._sample_relation(
                 connection, relation, request.sampling, seed
             )
+            provenance = {
+                "backend": "postgresql",
+                "server_version": server_version,
+                "server_version_num": server_version_num,
+                "source_view_token": source_view_token,
+                "source_view_contract": "postgresql-pg-current-snapshot-v1",
+                "sampling": sampling_provenance,
+                "type_mapping_contract_version": TYPE_MAPPING_CONTRACT_VERSION,
+                "relation_selector_kind": "postgresql-regclass",
+            }
             population = PopulationMetadata(
                 relation.relation_id,
                 relation.reltuples,
                 "estimate",
                 "postgresql.pg_class.reltuples",
             )
-            return AcquisitionInputs(
+            inputs = AcquisitionInputs(
                 (to_relation_schema(relation),),
                 (population,),
                 {relation.relation_id: samples},
-                {
-                    "backend": "postgresql",
-                    "server_version": server_version,
-                    "server_version_num": server_version_num,
-                    "sampling": sampling_provenance,
-                    "type_mapping_contract_version": TYPE_MAPPING_CONTRACT_VERSION,
-                    "relation_selector_kind": "postgresql-regclass",
-                },
+                provenance,
             )
+            truths = ()
+            if truth_workload is not None:
+                truths = self._collect_truth(
+                    connection, truth_workload, inputs.schemas[0], psycopg.sql
+                )
+            return inputs, truths, source_view_token, server_version, server_version_num
+        except GroundTruthAcquisitionError:
+            raise
         except PostgresAcquisitionError:
             raise
         except (psycopg.errors.InvalidName, psycopg.errors.UndefinedTable) as exc:
@@ -169,17 +196,19 @@ class PostgresSnapshotAcquirer(DBMSAcquirer):
         except psycopg.Error as exc:
             raise PostgresAcquisitionError("PostgreSQL acquisition query failed") from exc
         finally:
-            try:
-                connection.rollback()
-            finally:
-                connection.close()
+            if connection is not None:
+                try:
+                    connection.rollback()
+                finally:
+                    connection.close()
 
-    def capture(self, request: AcquisitionRequest, workload: Workload) -> AdvisorSnapshot:
-        started = time.monotonic()
-        inputs = self.acquire(request)
+    def acquire(self, request: AcquisitionRequest) -> AcquisitionInputs:
+        inputs, _, _, _, _ = self._run_acquisition(request, None)
+        return inputs
+
+    def _snapshot(self, inputs: AcquisitionInputs, workload: Workload) -> AdvisorSnapshot:
         provenance = dict(inputs.provenance)
-        provenance["sampling"]["requested_rows"] = request.sampling.sample_rows
-        provenance["sampling"]["seed"] = provenance["sampling"].get("seed", request.sampling.seed)
+        provenance["sampling"] = dict(provenance["sampling"])
         return AdvisorSnapshot(
             inputs.schemas,
             inputs.populations,
@@ -188,8 +217,108 @@ class PostgresSnapshotAcquirer(DBMSAcquirer):
             DBMSIdentity("postgresql", provenance["server_version"]),
             SnapshotConsistency(),
             provenance,
+            {},
+        )
+
+    def capture(self, request: AcquisitionRequest, workload: Workload) -> AdvisorSnapshot:
+        started = time.monotonic()
+        inputs, _, _, _, _ = self._run_acquisition(request, None)
+        snapshot = self._snapshot(inputs, workload)
+        provenance = dict(snapshot.semantic_provenance)
+        provenance["sampling"] = dict(provenance["sampling"])
+        provenance["sampling"]["requested_rows"] = request.sampling.sample_rows
+        provenance["sampling"]["seed"] = provenance["sampling"].get("seed", request.sampling.seed)
+        return AdvisorSnapshot(
+            snapshot.schemas,
+            snapshot.populations,
+            snapshot.workload,
+            snapshot.samples,
+            snapshot.dbms,
+            snapshot.consistency,
+            provenance,
             {"capture_elapsed_seconds": round(time.monotonic() - started, 6)},
         )
+
+    def capture_with_ground_truth(
+        self, request: AcquisitionRequest, workload: Workload
+    ) -> tuple[AdvisorSnapshot, GroundTruthSet]:
+        started = time.monotonic()
+        inputs, truths, source_view_token, server_version, server_version_num = (
+            self._run_acquisition(request, workload)
+        )
+        snapshot = self._snapshot(inputs, workload)
+        provenance = dict(snapshot.semantic_provenance)
+        provenance["sampling"] = dict(provenance["sampling"])
+        provenance["sampling"]["requested_rows"] = request.sampling.sample_rows
+        provenance["sampling"]["seed"] = provenance["sampling"].get("seed", request.sampling.seed)
+        snapshot = AdvisorSnapshot(
+            snapshot.schemas,
+            snapshot.populations,
+            snapshot.workload,
+            snapshot.samples,
+            snapshot.dbms,
+            snapshot.consistency,
+            provenance,
+            {"capture_elapsed_seconds": round(time.monotonic() - started, 6)},
+        )
+        snapshot_digest = snapshot_semantic_digest(snapshot)
+        snapshot = replace(snapshot, semantic_digest=snapshot_digest)
+        ground_truth = GroundTruthSet(
+            snapshot_digest,
+            workload.workload_id,
+            GroundTruthSource(
+                PRODUCTION_EXACT_SOURCE,
+                "postgresql",
+                server_version,
+                server_version_num,
+                source_view_token,
+            ),
+            truths,
+        )
+        return snapshot, ground_truth
+
+    def _collect_truth(
+        self, connection: Any, workload: Workload, schema: Any, sql: Any
+    ) -> tuple[CardinalityTruth, ...]:
+        try:
+            profiles = {profile.query_id: profile for profile in analyze_workload(workload, schema)}
+        except Exception as exc:
+            raise GroundTruthAcquisitionError("could not analyze workload for exact truth") from exc
+        eligible_queries = []
+        for query in workload.queries:
+            if query.weight <= 0:
+                continue
+            profile = profiles[query.query_id]
+            if profile.analysis_status != "supported":
+                raise GroundTruthAcquisitionError(
+                    f"positive-weight query {query.query_id!r} is outside supported truth scope: "
+                    f"{profile.reason}"
+                )
+            if contains_parameter(query.sql):
+                raise GroundTruthAcquisitionError(
+                    f"positive-weight query {query.query_id!r} contains unresolved PostgreSQL parameters"
+                )
+            eligible_queries.append(query)
+        truths = []
+        for query in eligible_queries:
+            query_sql = query.sql.strip()
+            if query_sql.endswith(";"):
+                query_sql = query_sql[:-1].rstrip()
+            statement = sql.SQL("SELECT count(*) FROM ({}) AS extstats_advisor_truth").format(
+                sql.SQL(query_sql)
+            )
+            try:
+                row = connection.execute(statement).fetchone()
+            except Exception as exc:
+                raise GroundTruthAcquisitionError(
+                    f"exact truth query failed for {query.query_id!r}"
+                ) from exc
+            if row is None or not isinstance(row[0], int) or row[0] < 0:
+                raise GroundTruthAcquisitionError(
+                    f"exact truth query returned an invalid cardinality for {query.query_id!r}"
+                )
+            truths.append(CardinalityTruth(query.query_id, row[0], PRODUCTION_EXACT_SOURCE))
+        return tuple(truths)
 
     def _verify_transaction(self, connection: Any) -> None:
         read_only = str(connection.execute("SHOW transaction_read_only").fetchone()[0]).lower()

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from extstats_advisor.candidates.groups import derive_relevant_groups
-from extstats_advisor.dbms.postgres.workload import analyze_query
+from extstats_advisor.dbms.postgres.workload import analyze_query, contains_parameter
 from extstats_advisor.errors import CandidateGenerationError
 from extstats_advisor.snapshot.model import (
     ColumnSchema,
@@ -76,3 +76,8 @@ def test_zero_weight_unsupported_query_does_not_create_groups(order_schema) -> N
         order_schema,
     )
     assert derive_relevant_groups(order_schema, (profile,)) == ()
+
+
+def test_parameter_detection_distinguishes_sql_parameters_from_literals() -> None:
+    assert contains_parameter("SELECT * FROM items WHERE id = $1") is True
+    assert contains_parameter("SELECT '$1' AS literal") is False

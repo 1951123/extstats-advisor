@@ -26,8 +26,14 @@ from extstats_advisor.dbms.postgres import (
 )
 from extstats_advisor.dbms.postgres.acquisition import _workload_from_path
 from extstats_advisor.errors import ExtStatsAdvisorError
+from extstats_advisor.ground_truth import (
+    ArtifactGroundTruthProvider,
+    load_ground_truth_set,
+    write_ground_truth_set,
+)
 from extstats_advisor.native_stats.repository import load_native_stats_repository
 from extstats_advisor.snapshot.bundle import load_snapshot, validate_snapshot, write_snapshot
+from extstats_advisor.utility import QErrorLoss, WeightedWorkloadUtility
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -49,6 +55,9 @@ def _parser() -> argparse.ArgumentParser:
     postgres.add_argument("--workload", required=True, type=Path)
     postgres.add_argument("--output", required=True, type=Path)
     postgres.add_argument("--candidate-row-limit-multiplier", type=int, default=20)
+    postgres.add_argument("--lock-timeout-ms", type=int, default=5_000)
+    postgres.add_argument("--statement-timeout-ms", type=int, default=60_000)
+    postgres.add_argument("--ground-truth-output", type=Path)
     candidates = commands.add_parser("candidates")
     candidate_commands = candidates.add_subparsers(dest="candidate_command", required=True)
     derive = candidate_commands.add_parser("derive")
@@ -89,6 +98,19 @@ def _parser() -> argparse.ArgumentParser:
     )
     estimate_postgres.add_argument("--query-id", required=True)
     estimate_postgres.add_argument("--candidate", action="append", default=[])
+    utility = commands.add_parser("utility")
+    utility_commands = utility.add_subparsers(dest="utility_command", required=True)
+    evaluate = utility_commands.add_parser("evaluate")
+    evaluate_backend = evaluate.add_subparsers(dest="utility_backend", required=True)
+    evaluate_postgres = evaluate_backend.add_parser("postgres")
+    evaluate_postgres.add_argument("snapshot", type=Path)
+    evaluate_postgres.add_argument("candidate_universe", type=Path)
+    evaluate_postgres.add_argument("native_repository", type=Path)
+    evaluate_postgres.add_argument("ground_truth", type=Path)
+    evaluate_postgres.add_argument(
+        "--dsn", default=os.environ.get("EXTSTATS_ADVISOR_PATCHED_POSTGRES_DSN")
+    )
+    evaluate_postgres.add_argument("--candidate", action="append", default=[])
     return parser
 
 
@@ -109,8 +131,23 @@ def main(argv: list[str] | None = None) -> int:
                     candidate_row_limit_multiplier=args.candidate_row_limit_multiplier,
                 ),
             )
-            snapshot = PostgresSnapshotAcquirer(args.dsn).capture(request, workload)
+            acquirer = PostgresSnapshotAcquirer(
+                args.dsn,
+                lock_timeout_ms=args.lock_timeout_ms,
+                statement_timeout_ms=args.statement_timeout_ms,
+            )
+            truth_digest = None
+            if args.ground_truth_output is None:
+                snapshot = acquirer.capture(request, workload)
+            else:
+                snapshot, ground_truth = acquirer.capture_with_ground_truth(request, workload)
             digest = write_snapshot(snapshot, args.output)
+            if args.ground_truth_output is not None:
+                if ground_truth.source_snapshot_semantic_digest != digest:
+                    raise ExtStatsAdvisorError(
+                        "ground-truth snapshot digest does not match published snapshot"
+                    )
+                truth_digest = write_ground_truth_set(ground_truth, args.ground_truth_output)
             print(
                 json.dumps(
                     {
@@ -118,6 +155,7 @@ def main(argv: list[str] | None = None) -> int:
                         "semantic_digest": digest,
                         "output": str(args.output),
                         "relation_count": len(snapshot.schemas),
+                        "ground_truth_semantic_digest": truth_digest,
                         "sample_row_counts": {
                             relation_id: table.num_rows
                             for relation_id, table in snapshot.samples.items()
@@ -211,6 +249,48 @@ def main(argv: list[str] | None = None) -> int:
                         "query_id": result.query_id,
                         "ordered_candidate_ids": list(configuration.ordered_candidate_ids),
                         "estimated_rows": result.estimated_rows,
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
+        if args.command == "utility":
+            if not args.dsn:
+                raise ExtStatsAdvisorError(
+                    "patched PostgreSQL DSN is required via --dsn or "
+                    "EXTSTATS_ADVISOR_PATCHED_POSTGRES_DSN"
+                )
+            snapshot = load_snapshot(args.snapshot)
+            universe = load_candidate_universe(args.candidate_universe, snapshot)
+            repository = load_native_stats_repository(args.native_repository)
+            ground_truth = load_ground_truth_set(args.ground_truth, snapshot)
+            supported_query_ids = []
+            profiles = {profile.query_id: profile for profile in universe.query_profiles}
+            for query in snapshot.workload.queries:
+                if query.weight > 0:
+                    profile = profiles.get(query.query_id)
+                    if profile is None or profile.analysis_status != "supported":
+                        raise ExtStatsAdvisorError(
+                            f"positive-weight query {query.query_id!r} is outside utility scope"
+                        )
+                    supported_query_ids.append(query.query_id)
+            with PostgresPlannerSession(args.dsn, snapshot, universe, repository) as session:
+                configuration = PostgresStatisticsConfiguration(tuple(args.candidate))
+                session.activate(configuration)
+                planner_estimates = session.estimate_queries(supported_query_ids)
+            estimates = {
+                estimate.query_id: estimate.estimated_rows for estimate in planner_estimates
+            }
+            result = WeightedWorkloadUtility(
+                snapshot.workload,
+                ArtifactGroundTruthProvider(ground_truth),
+                QErrorLoss(),
+            ).evaluate(estimates)
+            print(
+                json.dumps(
+                    {
+                        "ordered_candidate_ids": list(configuration.ordered_candidate_ids),
+                        **result.to_dict(),
                     },
                     sort_keys=True,
                 )

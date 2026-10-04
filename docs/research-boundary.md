@@ -3,11 +3,15 @@
 This repository is not a benchmark harness. The following must not become core
 dependencies or required artifact fields:
 
-- exact cardinality truth or an oracle;
+- benchmark exact cardinality truth or an oracle; production exact truth is
+  permitted only through the separate explicit GroundTruthSet contract;
 - q-error objectives or benchmark train/valid/test labels;
 - RQ1/RQ2/RQ3/RQ4 drivers, random-order experiments, or dataset ETL;
-- exact `COUNT(*)` population acquisition by default;
-- execution of every workload query to obtain truth;
+- exact `COUNT(*)` population acquisition by default (opt-in workload truth is
+  distinct and must share the snapshot source transaction);
+- execution of every workload query to obtain truth by default; the explicit
+  production contract only counts positive-weight supported queries in the
+  shared source transaction;
 - benchmark-specific candidate catalogs, incidence artifacts, or milestone APIs;
 - research Bundle compatibility layers and historical experiment drivers.
 

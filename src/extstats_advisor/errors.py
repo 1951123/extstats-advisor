@@ -39,3 +39,23 @@ class PlannerSandboxValidationError(PlannerSandboxError):
 
 class PlannerQueryError(PlannerSandboxError):
     """Raised when a workload query is outside the planner sandbox v1 scope."""
+
+
+class GroundTruthError(ExtStatsAdvisorError):
+    """Raised when exact-cardinality truth cannot be safely used."""
+
+
+class GroundTruthValidationError(GroundTruthError):
+    """Raised when a GroundTruthSet artifact is malformed or incompatible."""
+
+
+class GroundTruthAcquisitionError(GroundTruthError):
+    """Raised when production exact-cardinality collection fails."""
+
+
+class UtilityError(ExtStatsAdvisorError):
+    """Raised when a loss or workload utility cannot be evaluated."""
+
+
+class UtilityValidationError(UtilityError):
+    """Raised when estimates, truth, or utility inputs are invalid."""

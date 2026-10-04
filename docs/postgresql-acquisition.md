@@ -30,8 +30,18 @@ UTC for timestamp-with-time-zone values, uses `application_name=extstats-advisor
 and applies bounded local lock and statement timeouts. The connection is
 rolled back and closed after acquisition.
 
-The backend does not create objects, run `ANALYZE`, execute workload queries,
-request an exported snapshot, use exact `COUNT(*)`, or require superuser,
+Exact cardinality is an explicit opt-in. Add
+`--ground-truth-output ground-truth-v1.json` to capture positive-weight
+supported workload counts. The snapshot and the standalone GroundTruthSet are
+then collected in this same transaction and share a PostgreSQL
+`pg_current_snapshot()` source-view token. `--statement-timeout-ms` applies to
+truth queries as well as acquisition reads; the default is 60 seconds. Exact
+truth may be expensive on large production tables even though it is read-only.
+If any required truth query fails, no partial truth artifact is published.
+
+The normal backend path does not create objects, run `ANALYZE`, execute
+workload queries for truth, request an exported snapshot, use exact `COUNT(*)`,
+or require superuser,
 `CREATE`, or `ANALYZE` privileges. It accepts only ordinary stored base tables;
 views, materialized views, foreign tables, partitioned/inheritance semantics,
 temporary tables, and row-level security are rejected. Sampling uses `ONLY`.
@@ -61,7 +71,6 @@ requested number exists. A conservative default candidate limit of 20 times
 the requested rows prevents unbounded memory or work; exceeding it aborts the
 capture rather than truncating the sample.
 
-The implementation intentionally stops at source acquisition. It does not
-run a planner sandbox, read native extended statistics, generate candidates,
-search configurations, recommend or deploy statistics, or evaluate research
-truth.
+The implementation intentionally stops at source acquisition and the explicit
+truth handoff. It does not search configurations, recommend or deploy
+statistics, or evaluate benchmark/research truth.

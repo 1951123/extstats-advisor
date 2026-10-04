@@ -502,6 +502,15 @@ def _lock(connection: Any) -> None:
     )
 
 
+def _verify_read_only_repeatable_read(connection: Any) -> None:
+    read_only = str(connection.execute("SHOW transaction_read_only").fetchone()[0]).lower()
+    isolation = str(connection.execute("SHOW transaction_isolation").fetchone()[0]).lower()
+    if read_only != "on" or isolation != "repeatable read":
+        raise PlannerSandboxValidationError(
+            "sandbox verification requires a repeatable-read read-only transaction"
+        )
+
+
 def prepare_postgres_planner_sandbox(
     dsn: str,
     snapshot: AdvisorSnapshot,
@@ -712,6 +721,7 @@ def verify_postgres_planner_sandbox(
         )
         connection.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
         capabilities = probe_patched_postgres(connection)
+        _verify_read_only_repeatable_read(connection)
         metadata, target_oid, checks, compatibility = _verify_postgres_planner_sandbox_connection(
             connection,
             snapshot,

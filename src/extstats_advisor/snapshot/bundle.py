@@ -120,6 +120,51 @@ def _arrow_matches_schema(table: pa.Table, schema: RelationSchema) -> None:
             )
 
 
+def snapshot_semantic_digest(snapshot: AdvisorSnapshot) -> str:
+    """Compute the sealed snapshot identity without publishing a directory."""
+
+    descriptors: list[SampleDescriptor] = []
+    for relation_id, table in sorted(snapshot.samples.items()):
+        schema = snapshot.schema_by_id[relation_id]
+        if not isinstance(table, pa.Table):
+            raise SnapshotValidationError(f"sample is not an Arrow table: {relation_id}")
+        _arrow_matches_schema(table, schema)
+        payload = serialize_table(table)
+        descriptors.append(
+            SampleDescriptor(
+                relation_id,
+                f"samples/{digest_bytes(relation_id.encode('utf-8'))[:24]}.arrow",
+                table.num_rows,
+                "arrow-ipc-file",
+                digest_bytes(payload),
+                {
+                    "library": "pyarrow",
+                    "version": pa.__version__,
+                    "format": "Arrow IPC file",
+                },
+            )
+        )
+    schema_json = {"relations": [item.to_dict() for item in snapshot.schemas]}
+    population_json = {"relations": [item.to_dict() for item in snapshot.populations]}
+    workload_json = snapshot.workload.to_dict()
+    manifest = {
+        "format_version": FORMAT_VERSION,
+        "dbms": snapshot.dbms.to_dict(),
+        "component_digests": {
+            "schema.json": digest_json(schema_json),
+            "population.json": digest_json(population_json),
+            "workload.json": digest_json(workload_json),
+        },
+        "sample_inventory": [
+            item.to_dict() for item in sorted(descriptors, key=lambda item: item.relation_id)
+        ],
+        "snapshot_consistency": snapshot.consistency.to_dict(),
+        "semantic_provenance": dict(snapshot.semantic_provenance),
+        "sensitivity": dict(snapshot.sensitivity),
+    }
+    return digest_json(_semantic_manifest(manifest))
+
+
 def write_snapshot(snapshot: AdvisorSnapshot, destination: Path) -> str:
     """Write, seal, verify, and atomically publish a new snapshot directory."""
 

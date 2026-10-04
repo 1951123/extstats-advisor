@@ -11,6 +11,11 @@ from extstats_advisor.dbms.postgres import (
     UnsupportedPostgresTypeError,
     UnsupportedRelationError,
 )
+from extstats_advisor.ground_truth import (
+    load_ground_truth_set,
+    validate_ground_truth_set,
+    write_ground_truth_set,
+)
 from extstats_advisor.snapshot.bundle import load_snapshot, validate_snapshot, write_snapshot
 from extstats_advisor.snapshot.model import Workload, WorkloadQuery
 
@@ -81,6 +86,51 @@ def test_live_acquisition_observes_read_only_repeatable_read(
         _workload(),
     )
     assert acquirer.observed == ("on", "repeatable read")
+
+
+def test_opt_in_ground_truth_shares_source_view_and_is_exact(
+    postgres_capture_dsn: str, tmp_path: Path
+) -> None:
+    acquirer = PostgresSnapshotAcquirer(postgres_capture_dsn)
+    snapshot, ground_truth = acquirer.capture_with_ground_truth(
+        AcquisitionRequest(
+            '"Reporting.Schema"."Order Facts"',
+            SamplePolicy(17, seed=42),
+        ),
+        _workload(),
+    )
+    snapshot_path = tmp_path / "snapshot"
+    truth_path = tmp_path / "ground-truth-v1.json"
+    snapshot_digest = write_snapshot(snapshot, snapshot_path)
+    truth_digest = write_ground_truth_set(ground_truth, truth_path)
+    loaded_snapshot = load_snapshot(snapshot_path)
+    assert snapshot_digest == ground_truth.source_snapshot_semantic_digest
+    assert (
+        snapshot.semantic_provenance["source_view_token"] == ground_truth.source.source_view_token
+    )
+    assert validate_ground_truth_set(truth_path, loaded_snapshot)["semantic_digest"] == truth_digest
+    assert load_ground_truth_set(truth_path, loaded_snapshot).truths[0].cardinality == 100
+
+
+def test_normal_capture_does_not_execute_workload_truth_queries(
+    postgres_capture_dsn: str, tmp_path: Path
+) -> None:
+    snapshot = PostgresSnapshotAcquirer(postgres_capture_dsn).capture(
+        AcquisitionRequest(
+            '"Reporting.Schema"."Order Facts"',
+            SamplePolicy(3, seed=7),
+        ),
+        Workload(
+            "no-truth-workload",
+            (
+                WorkloadQuery(
+                    "q_missing",
+                    'SELECT * FROM "Reporting.Schema"."Missing For Truth Test"',
+                ),
+            ),
+        ),
+    )
+    write_snapshot(snapshot, tmp_path / "normal-capture")
 
 
 def test_unsupported_type_and_rls_fail_closed(postgres_capture_dsn: str) -> None:
