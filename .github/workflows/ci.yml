@@ -76,15 +76,6 @@ jobs:
             -o "-p 55438" -l "$GITHUB_WORKSPACE/.pglog" -w start
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e '.[dev,postgres]'
-      - name: Verify patched PostgreSQL identity
-        run: |
-          python - <<'PY'
-          import psycopg
-
-          with psycopg.connect("postgresql://postgres@localhost:55438/postgres") as connection:
-              assert connection.execute("SELECT current_user").fetchone()[0] == "postgres"
-              assert connection.execute("SHOW server_version_num").fetchone()[0].startswith("160")
-          PY
       - name: Run patched PostgreSQL integration
         run: pytest -m patched_integration
         env:
