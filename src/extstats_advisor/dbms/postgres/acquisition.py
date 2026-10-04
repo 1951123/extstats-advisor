@@ -102,18 +102,21 @@ class PostgresSnapshotAcquirer(DBMSAcquirer):
             connection = psycopg.connect(
                 self._dsn,
                 application_name="extstats-advisor",
-                autocommit=False,
+                autocommit=True,
             )
         except psycopg.Error as exc:
             raise PostgresConnectionError("could not connect to PostgreSQL") from exc
         try:
             connection.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
-            connection.execute("SET LOCAL lock_timeout = %s", (f"{self._lock_timeout_ms}ms",))
             connection.execute(
-                "SET LOCAL statement_timeout = %s", (f"{self._statement_timeout_ms}ms",)
+                "SELECT set_config('lock_timeout', %s, true)",
+                (f"{self._lock_timeout_ms}ms",),
             )
-            connection.execute("SET LOCAL timezone = 'UTC'")
-            connection.execute("SET LOCAL application_name = 'extstats-advisor'")
+            connection.execute(
+                "SELECT set_config('statement_timeout', %s, true)",
+                (f"{self._statement_timeout_ms}ms",),
+            )
+            connection.execute("SELECT set_config('timezone', %s, true)", ("UTC",))
             self._verify_transaction(connection)
             server_version = str(connection.execute("SHOW server_version").fetchone()[0])
             server_version_num = int(connection.execute("SHOW server_version_num").fetchone()[0])

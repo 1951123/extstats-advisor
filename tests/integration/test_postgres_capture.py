@@ -62,6 +62,27 @@ def test_stock_postgres_capture_is_typed_repeatable_and_read_only(
     assert loaded.consistency.to_dict()["mode"] == "consistent-source-view"
 
 
+def test_live_acquisition_observes_read_only_repeatable_read(
+    postgres_capture_dsn: str,
+) -> None:
+    class ObservingAcquirer(PostgresSnapshotAcquirer):
+        observed: tuple[str, str] | None = None
+
+        def _verify_transaction(self, connection) -> None:
+            super()._verify_transaction(connection)
+            self.observed = (
+                str(connection.execute("SHOW transaction_read_only").fetchone()[0]),
+                str(connection.execute("SHOW transaction_isolation").fetchone()[0]),
+            )
+
+    acquirer = ObservingAcquirer(postgres_capture_dsn)
+    acquirer.capture(
+        AcquisitionRequest('"Reporting.Schema"."Order Facts"', SamplePolicy(3, seed=9)),
+        _workload(),
+    )
+    assert acquirer.observed == ("on", "repeatable read")
+
+
 def test_unsupported_type_and_rls_fail_closed(postgres_capture_dsn: str) -> None:
     acquirer = PostgresSnapshotAcquirer(postgres_capture_dsn)
     with pytest.raises(UnsupportedPostgresTypeError, match="Unsupported JSON"):
