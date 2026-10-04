@@ -3,8 +3,8 @@
 from extstats_advisor.native_stats.model import (
     NATIVE_STATS_REPOSITORY_FORMAT_VERSION,
     NativeStatsCandidate,
-    NativeStatsRepository,
     NativeStatsMaterialization,
+    NativeStatsRepository,
     PostgreSQLNativeStatsRepository,
 )
 from extstats_advisor.native_stats.repository import (

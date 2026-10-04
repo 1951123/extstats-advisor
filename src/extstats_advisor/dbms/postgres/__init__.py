@@ -5,10 +5,6 @@ only when live PostgreSQL capture is required.
 """
 
 from extstats_advisor.dbms.postgres.acquisition import PostgresSnapshotAcquirer, capture_snapshot
-from extstats_advisor.dbms.postgres.native_stats import (
-    materialize_native_stats,
-    materialize_postgresql_native_stats,
-)
 from extstats_advisor.dbms.postgres.errors import (
     InvalidPopulationEstimateError,
     PostgresAcquisitionError,
@@ -19,6 +15,10 @@ from extstats_advisor.dbms.postgres.errors import (
     SamplingResourceLimitError,
     UnsupportedPostgresTypeError,
     UnsupportedRelationError,
+)
+from extstats_advisor.dbms.postgres.native_stats import (
+    materialize_native_stats,
+    materialize_postgresql_native_stats,
 )
 
 __all__ = [

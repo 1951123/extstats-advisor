@@ -179,11 +179,15 @@ def validate_native_stats_repository(path: Path) -> dict[str, Any]:
             raise NativeStatsRepositoryValidationError(
                 f"native payload digest mismatch: {candidate_id}"
             )
-    actual = {
-        path.relative_to(root).as_posix()
-        for path in (root / "payloads").glob("*")
-        if path.is_file()
-    } if (root / "payloads").is_dir() else set()
+    actual = (
+        {
+            path.relative_to(root).as_posix()
+            for path in (root / "payloads").glob("*")
+            if path.is_file()
+        }
+        if (root / "payloads").is_dir()
+        else set()
+    )
     if actual != listed:
         raise NativeStatsRepositoryValidationError("payload directory does not match manifest")
     return {

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any
 
 from extstats_advisor.errors import NativeStatsRepositoryValidationError
 
@@ -133,9 +134,7 @@ class NativeStatsMaterialization:
                 "native materialization must execute exactly one ANALYZE"
             )
         if not _SHA256.fullmatch(self.ordinary_stats_fingerprint):
-            raise NativeStatsRepositoryValidationError(
-                "ordinary statistics fingerprint is invalid"
-            )
+            raise NativeStatsRepositoryValidationError("ordinary statistics fingerprint is invalid")
         ids = [candidate.candidate_id for candidate in self.candidates]
         if len(ids) != len(set(ids)) or set(ids) != set(self.payloads):
             raise NativeStatsRepositoryValidationError(

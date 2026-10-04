@@ -59,6 +59,4 @@ def ordinary_stats_fingerprint(connection: Any, relation_oid: int) -> str:
                 "elem_count_histogram": row[11],
             }
         )
-    return digest_json(
-        {"contract": "postgresql-ordinary-stats-fingerprint-v1", "columns": columns}
-    )
+    return digest_json({"contract": "postgresql-ordinary-stats-fingerprint-v1", "columns": columns})

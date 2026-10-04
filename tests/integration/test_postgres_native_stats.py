@@ -100,18 +100,25 @@ def test_patched_postgres_materializes_one_fixed_sample_and_rolls_back(
     second_path = tmp_path / "native-second"
     write_native_stats_repository(first, first_path)
     write_native_stats_repository(second, second_path)
-    assert load_native_stats_repository(first_path).semantic_digest == load_native_stats_repository(
-        second_path
-    ).semantic_digest
+    assert (
+        load_native_stats_repository(first_path).semantic_digest
+        == load_native_stats_repository(second_path).semantic_digest
+    )
     assert validate_native_stats_repository(first_path)["candidate_count"] == 6
 
     import psycopg
 
     with psycopg.connect(patched_postgres_dsn, autocommit=True) as connection:
-        assert connection.execute(
-            "SELECT count(*) FROM pg_catalog.pg_statistic_ext "
-            "WHERE stxname LIKE 'extstats_adv_stat_%'"
-        ).fetchone()[0] == 0
-        assert connection.execute(
-            "SELECT count(*) FROM pg_catalog.pg_class WHERE relname LIKE 'extstats_adv_target_%'"
-        ).fetchone()[0] == 0
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM pg_catalog.pg_statistic_ext "
+                "WHERE stxname LIKE 'extstats_adv_stat_%'"
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM pg_catalog.pg_class WHERE relname LIKE 'extstats_adv_target_%'"
+            ).fetchone()[0]
+            == 0
+        )

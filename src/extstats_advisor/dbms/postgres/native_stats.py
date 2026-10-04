@@ -21,9 +21,9 @@ from extstats_advisor.errors import NativeStatsMaterializationError
 from extstats_advisor.native_stats.model import (
     ABSENT_NATIVE,
     MATERIALIZATION_METHOD,
+    PRESENT,
     NativeStatsCandidate,
     NativeStatsMaterialization,
-    PRESENT,
 )
 from extstats_advisor.snapshot.model import AdvisorSnapshot, RelationSchema
 
@@ -92,9 +92,7 @@ def _create_statistics(
         try:
             columns = [by_ordinal[ordinal] for ordinal in candidate.column_ordinals]
         except KeyError as exc:
-            raise NativeStatsMaterializationError(
-                "candidate references an unknown column"
-            ) from exc
+            raise NativeStatsMaterializationError("candidate references an unknown column") from exc
         if tuple(column.name for column in columns) != candidate.column_names:
             raise NativeStatsMaterializationError("candidate column names do not match snapshot")
         statistic_name = _statistic_name(candidate.candidate_id)

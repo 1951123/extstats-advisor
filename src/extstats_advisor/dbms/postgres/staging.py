@@ -30,9 +30,7 @@ def _resolve_collation(connection: Any, collation: str) -> tuple[str, str]:
         (collation,),
     ).fetchone()
     if row is None:
-        raise NativeStatsMaterializationError(
-            f"snapshot collation is unavailable: {collation!r}"
-        )
+        raise NativeStatsMaterializationError(f"snapshot collation is unavailable: {collation!r}")
     return str(row[0]), str(row[1])
 
 
@@ -48,10 +46,7 @@ def create_scratch_relation(
             raise UnsupportedPostgresTypeError(
                 f"snapshot column lacks native PostgreSQL type: {column.name!r}"
             )
-        try:
-            native_type = validate_native_type_for_ddl(column.native_type)
-        except UnsupportedPostgresTypeError:
-            raise
+        native_type = validate_native_type_for_ddl(column.native_type)
         if map_postgres_type(native_type).arrow_type_name != column.arrow_type:
             raise NativeStatsMaterializationError(
                 f"snapshot Arrow type does not match PostgreSQL type: {column.name!r}"
@@ -85,9 +80,7 @@ def copy_arrow_table(
     batch_size: int,
 ) -> None:
     columns = sql.SQL(", ").join(sql.Identifier(column.name) for column in schema.columns)
-    statement = sql.SQL("COPY {} ({}) FROM STDIN").format(
-        scratch_relation_sql(name, sql), columns
-    )
+    statement = sql.SQL("COPY {} ({}) FROM STDIN").format(scratch_relation_sql(name, sql), columns)
     try:
         with connection.cursor().copy(statement) as copy:
             for batch in table.to_batches(max_chunksize=batch_size):
