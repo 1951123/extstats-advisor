@@ -1,0 +1,13 @@
+"""Explicit exception boundaries for the production advisor."""
+
+
+class ExtStatsAdvisorError(Exception):
+    """Base class for expected advisor errors."""
+
+
+class SnapshotValidationError(ExtStatsAdvisorError):
+    """Raised when a snapshot is malformed, inconsistent, or tampered with."""
+
+
+class SnapshotCompatibilityError(SnapshotValidationError):
+    """Raised when a snapshot cannot be consumed by this implementation."""
