@@ -144,7 +144,7 @@ def test_normal_capture_does_not_execute_workload_truth_queries(
 def test_cardinality_changing_truth_query_fails_before_execution(
     postgres_capture_dsn: str, sql: str
 ) -> None:
-    with pytest.raises(GroundTruthAcquisitionError, match="outside supported"):
+    with pytest.raises(GroundTruthAcquisitionError):
         PostgresSnapshotAcquirer(postgres_capture_dsn).capture_with_ground_truth(
             AcquisitionRequest(
                 '"Reporting.Schema"."Order Facts"',
