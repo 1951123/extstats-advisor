@@ -38,7 +38,7 @@ class PlannerSandboxValidationError(PlannerSandboxError):
 
 
 class PlannerQueryError(PlannerSandboxError):
-    """Raised when a workload query is outside the planner sandbox v1 scope."""
+    """Raised when a workload query is outside the planner sandbox scope."""
 
 
 class GroundTruthError(ExtStatsAdvisorError):

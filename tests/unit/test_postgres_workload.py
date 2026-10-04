@@ -35,6 +35,7 @@ def order_schema() -> RelationSchema:
 def test_supported_predicate_profiles_preserve_native_names(order_schema, sql) -> None:
     profile = analyze_query(WorkloadQuery("q1", sql), order_schema)
     assert profile.analysis_status == "supported"
+    assert profile.analysis_contract_version == "postgresql-simple-selection-v2"
     assert profile.relation_id == order_schema.relation_id
     assert profile.predicate_column_ordinals == (1, 2)
     assert profile.predicate_column_names == ("Customer ID", "城市")
@@ -43,6 +44,36 @@ def test_supported_predicate_profiles_preserve_native_names(order_schema, sql) -
 @pytest.mark.parametrize(
     "sql",
     [
+        'SELECT * FROM "Order Facts"',
+        'SELECT "Customer ID" FROM "Order Facts"',
+        'SELECT o."Customer ID" FROM "Order Facts" AS o',
+        'SELECT "Customer ID" AS customer_id FROM "Order Facts"',
+        'SELECT o.* FROM "Order Facts" AS o',
+    ],
+)
+def test_row_preserving_projections_are_supported(order_schema, sql) -> None:
+    profile = analyze_query(WorkloadQuery("q_projection", sql), order_schema)
+    assert profile.analysis_status == "supported"
+    assert profile.analysis_contract_version == "postgresql-simple-selection-v2"
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        'SELECT * FROM "Order Facts" LIMIT 1',
+        'SELECT * FROM "Order Facts" OFFSET 1',
+        'SELECT DISTINCT * FROM "Order Facts"',
+        'SELECT DISTINCT ON ("Customer ID") * FROM "Order Facts"',
+        'SELECT "Customer ID", count(*) FROM "Order Facts" GROUP BY "Customer ID"',
+        'SELECT * FROM "Order Facts" GROUP BY "Customer ID" HAVING count(*) > 1',
+        'SELECT count(*) FROM "Order Facts"',
+        'SELECT sum("Amount") FROM "Order Facts"',
+        'SELECT row_number() OVER () FROM "Order Facts"',
+        'SELECT lower("城市") FROM "Order Facts"',
+        'SELECT "Customer ID" + 1 FROM "Order Facts"',
+        'SELECT generate_series(1, 2) FROM "Order Facts"',
+        'SELECT * FROM "Order Facts" ORDER BY "Customer ID"',
+        'SELECT * FROM "Order Facts" FOR UPDATE',
         'SELECT * FROM "Order Facts" a JOIN other b ON a."Customer ID" = b.id',
         'SELECT * FROM "Order Facts" WHERE "Customer ID" = 1 OR "城市" = 2',
         'SELECT * FROM "Order Facts" WHERE NOT ("Customer ID" = 1)',

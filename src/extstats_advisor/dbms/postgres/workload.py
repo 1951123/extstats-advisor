@@ -188,6 +188,35 @@ def _relation_binding(relation: Any, schema: RelationSchema, ast: Any) -> set[st
     return aliases
 
 
+def _validate_projection(select: Any, aliases: set[str], schema: RelationSchema, ast: Any) -> None:
+    """Accept only direct columns and star projections.
+
+    The planner utility compares a base-relation scan estimate with the
+    wrapped SELECT's output cardinality.  Expressions, aggregates, and
+    set-returning functions are therefore deliberately outside this contract.
+    """
+
+    from pglast.ast import A_Star, ColumnRef
+
+    if not select.targetList:
+        raise ValueError("query must contain a target list")
+    for target in select.targetList:
+        value = target.val
+        if not isinstance(value, ColumnRef):
+            raise TypeError("projection must contain only direct columns or star")
+        fields = value.fields
+        if any(not isinstance(field, (ast.String, A_Star)) for field in fields):
+            raise ValueError("projection contains an unsupported field")
+        if len(fields) == 1 and isinstance(fields[0], A_Star):
+            continue
+        if len(fields) == 2 and isinstance(fields[0], ast.String) and isinstance(fields[1], A_Star):
+            if fields[0].sval not in aliases:
+                raise ValueError("qualified star does not match the base relation")
+            continue
+        if _column_ref(value, aliases, schema) is None:
+            raise ValueError("projection column does not match the base relation")
+
+
 def analyze_query(query: WorkloadQuery, schema: RelationSchema) -> PredicateProfile:
     try:
         pglast, parse_sql, ast, enums, _ = _pglast()
@@ -202,11 +231,23 @@ def analyze_query(query: WorkloadQuery, schema: RelationSchema) -> PredicateProf
         if not select.fromClause or len(select.fromClause) != 1:
             raise ValueError("query must reference exactly one base relation")
         aliases = _relation_binding(select.fromClause[0], schema, ast)
+        if (
+            select.distinctClause is not None
+            or select.groupClause is not None
+            or select.havingClause is not None
+            or select.windowClause is not None
+            or select.limitCount is not None
+            or select.limitOffset is not None
+            or select.sortClause is not None
+            or select.lockingClause is not None
+        ):
+            raise ValueError("query contains a cardinality-changing or out-of-scope clause")
         if any(
             isinstance(node, (ast.SubLink, ast.RangeSubselect, ast.CommonTableExpr))
             for node in _walk(select)
         ):
             raise ValueError("subqueries are unsupported")
+        _validate_projection(select, aliases, schema, ast)
         ordinals = _extract_predicate_columns(select.whereClause, aliases, schema, ast, enums)
         names = tuple(
             next(column.name for column in schema.columns if column.ordinal == ordinal)

@@ -22,7 +22,7 @@ from extstats_advisor.dbms.postgres.capabilities import (
 from extstats_advisor.dbms.postgres.workload import analyze_workload, parser_metadata
 from extstats_advisor.errors import CandidateGenerationError, CandidateUniverseValidationError
 from extstats_advisor.snapshot.model import AdvisorSnapshot
-from extstats_advisor.workload.analysis import PredicateProfile
+from extstats_advisor.workload.analysis import ANALYSIS_CONTRACT_VERSION, PredicateProfile
 
 CANDIDATE_UNIVERSE_FORMAT_VERSION = "candidate-universe-v1"
 
@@ -89,8 +89,7 @@ class CandidateUniverse:
         if (
             self.workload_analysis.get("parser") != "pglast"
             or not isinstance(self.workload_analysis.get("parser_version"), str)
-            or self.workload_analysis.get("analysis_contract_version")
-            != "postgresql-simple-selection-v1"
+            or self.workload_analysis.get("analysis_contract_version") != ANALYSIS_CONTRACT_VERSION
         ):
             raise CandidateUniverseValidationError("invalid workload analysis metadata")
         if self.static_precedence_policy != POSTGRES_STATIC_PRECEDENCE_VERSION:
@@ -254,6 +253,8 @@ def _from_dict(value: dict[str, Any]) -> CandidateUniverse:
             candidates,
             incidence,
         )
+    except CandidateUniverseValidationError:
+        raise
     except (CandidateGenerationError, KeyError, TypeError) as exc:
         raise CandidateUniverseValidationError(
             "candidate-universe is missing required fields"

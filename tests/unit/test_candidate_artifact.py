@@ -63,6 +63,15 @@ def test_candidate_artifact_digest_and_source_binding_fail_closed(tmp_path: Path
     with pytest.raises(CandidateUniverseValidationError):
         validate_candidate_universe(path)
 
+    old_contract = universe.to_dict()
+    old_contract["workload_analysis"]["analysis_contract_version"] = (
+        "postgresql-simple-selection-v1"
+    )
+    old_path = tmp_path / "old-contract.json"
+    old_path.write_text(json.dumps(old_contract), encoding="utf-8")
+    with pytest.raises(CandidateUniverseValidationError, match="analysis metadata"):
+        validate_candidate_universe(old_path)
+
     other = replace(snapshot, workload=Workload("other", (WorkloadQuery("q1", "SELECT 1"),)))
     other_path = tmp_path / "other-snapshot"
     write_snapshot(other, other_path)

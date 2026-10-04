@@ -9,7 +9,7 @@ from typing import Any
 
 from extstats_advisor.errors import CandidateGenerationError
 
-ANALYSIS_CONTRACT_VERSION = "postgresql-simple-selection-v1"
+ANALYSIS_CONTRACT_VERSION = "postgresql-simple-selection-v2"
 SUPPORTED_ANALYSIS_STATUS = "supported"
 UNSUPPORTED_ANALYSIS_STATUS = "unsupported"
 
@@ -87,9 +87,7 @@ class PredicateProfile:
                 predicate_column_ordinals=tuple(value["predicate_column_ordinals"]),
                 predicate_column_names=tuple(value["predicate_column_names"]),
                 analysis_status=value["analysis_status"],
-                analysis_contract_version=value.get(
-                    "analysis_contract_version", ANALYSIS_CONTRACT_VERSION
-                ),
+                analysis_contract_version=value["analysis_contract_version"],
                 reason=value.get("reason"),
             )
         except (KeyError, TypeError) as exc:

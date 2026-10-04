@@ -11,6 +11,7 @@ from extstats_advisor.dbms.postgres import (
     UnsupportedPostgresTypeError,
     UnsupportedRelationError,
 )
+from extstats_advisor.errors import GroundTruthAcquisitionError
 from extstats_advisor.ground_truth import (
     load_ground_truth_set,
     validate_ground_truth_set,
@@ -131,6 +132,26 @@ def test_normal_capture_does_not_execute_workload_truth_queries(
         ),
     )
     write_snapshot(snapshot, tmp_path / "normal-capture")
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        'SELECT * FROM "Reporting.Schema"."Order Facts" LIMIT 1',
+        'SELECT count(*) FROM "Reporting.Schema"."Order Facts"',
+    ],
+)
+def test_cardinality_changing_truth_query_fails_before_execution(
+    postgres_capture_dsn: str, sql: str
+) -> None:
+    with pytest.raises(GroundTruthAcquisitionError, match="outside supported"):
+        PostgresSnapshotAcquirer(postgres_capture_dsn).capture_with_ground_truth(
+            AcquisitionRequest(
+                '"Reporting.Schema"."Order Facts"',
+                SamplePolicy(3, seed=8),
+            ),
+            Workload("invalid-truth-workload", (WorkloadQuery("q_invalid", sql),)),
+        )
 
 
 def test_unsupported_type_and_rls_fail_closed(postgres_capture_dsn: str) -> None:

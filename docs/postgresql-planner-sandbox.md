@@ -39,9 +39,13 @@ without inventing payloads.
 
 Only workload queries already marked supported by `CandidateUniverse` may be
 planned. Query text is retrieved by `query_id` from the sealed snapshot; ad-hoc
-SQL is not accepted. Snapshot v1 has no representative bind values, so any
-query containing PostgreSQL parameter references such as `$1` fails closed.
-The planner sandbox supports self-contained SQL only.
+SQL is not accepted. The required analysis contract is
+`postgresql-simple-selection-v2`: a row-preserving single-relation selection
+with direct-column/star projection and supported `AND` predicates. Snapshot v1
+has no representative bind values, so any query containing PostgreSQL
+parameter references such as `$1` fails closed. The planner sandbox supports
+self-contained SQL only. This scope makes the scan-node `Plan Rows` quantity
+comparable to exact cardinality from the wrapped workload SELECT.
 
 Before a planner session opens, sandbox verification checks the contract and
 all semantic digests, the structured target identity, exact sample row counts,

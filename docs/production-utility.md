@@ -44,11 +44,17 @@ SELECT count(*)
 FROM (<sealed workload query>) AS extstats_advisor_truth
 ```
 
-Unsupported positive-weight queries and unresolved parameters (`$1`, `$2`, ...)
-fail closed. The statement timeout applies to these count queries; a failed
-query publishes no partial truth artifact. Exact counts may be expensive on
-large production relations despite being read-only. Normal capture without
-`--ground-truth-output` executes no workload truth queries.
+Only `postgresql-simple-selection-v2` queries are eligible: one base relation,
+supported `AND` predicates, and row-preserving direct-column/star projection.
+`DISTINCT`, grouping, aggregates, windows, `LIMIT`, `OFFSET`, `ORDER BY`,
+locking clauses, set-returning expressions, arbitrary projection expressions,
+and unresolved parameters (`$1`, `$2`, ...) fail closed before count
+execution. This ensures the wrapped output cardinality is the same logical
+post-filter row set represented by the planner scan estimate. The statement
+timeout applies to these count queries; a failed query publishes no partial
+truth artifact. Exact counts may be expensive on large production relations
+despite being read-only. Normal capture without `--ground-truth-output`
+executes no workload truth queries.
 
 `GroundTruthProvider` is DBMS-neutral. The v1
 `ProductionExactCardinalityProvider` is artifact-backed, so future runtime,

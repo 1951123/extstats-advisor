@@ -13,18 +13,31 @@ AdvisorSnapshot
 
 PostgreSQL SQL parsing is intentionally backend-specific. The analyzer uses
 `pglast` and records its parser version and the
-`postgresql-simple-selection-v1` analysis contract. It emits only portable
+`postgresql-simple-selection-v2` analysis contract. It emits only portable
 query ID, relation ID, column ordinals/names, weight, status, and a concise
 unsupported reason. The core group derivation never sees PostgreSQL AST nodes,
 OIDs, `attnum`, or native statistic names.
 
-## v1 query scope
+## v2 query scope
 
-The analyzer accepts one simple `SELECT` over the one relation in the
-snapshot. The relation may be qualified by the exact structured snapshot
-schema/name or be unqualified when its table name matches exactly. Aliases,
-quoted identifiers, Unicode identifiers, and PostgreSQL `$1`-style parameters
-are handled structurally.
+The analyzer accepts one row-preserving `SELECT` over exactly one base
+relation in the snapshot. The relation may be qualified by the exact
+structured snapshot schema/name or be unqualified when its table name matches
+exactly. Aliases, quoted identifiers, Unicode identifiers, and PostgreSQL
+`$1`-style parameters are handled structurally.
+
+The v2 contract is deliberately a single-relation selection contract:
+
+```text
+one input base-relation row -> zero or one output row
+```
+
+Only direct column references and star projections (`*`, `t.*`, with optional
+aliases on direct columns) are supported. `DISTINCT`, `GROUP BY`, `HAVING`,
+aggregate or window projections, `LIMIT`, `OFFSET`, `ORDER BY`, locking
+clauses, set-returning expressions, arbitrary functions, and arithmetic
+projections are unsupported. This keeps the exact wrapped truth cardinality
+equal to the managed base-relation post-filter cardinality used by the planner.
 
 Supported selection predicates are conjunctions of direct single-column
 clauses: `=`, `<>`, `<`, `<=`, `>`, `>=` with a constant or parameter on the
