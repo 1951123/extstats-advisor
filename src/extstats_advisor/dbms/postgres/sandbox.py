@@ -128,10 +128,11 @@ def _relation_lookup(connection: Any, relation: RelationName) -> tuple[Any, ...]
     return connection.execute(
         """
         SELECT c.oid::bigint, c.relkind, c.reltuples::double precision,
-               c.n_mod_since_analyze::double precision, c.reloptions,
+               s.n_mod_since_analyze::double precision, c.reloptions,
                pg_get_userbyid(c.relowner), n.nspname, c.relname
           FROM pg_catalog.pg_class AS c
           JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+          LEFT JOIN pg_catalog.pg_stat_all_tables AS s ON s.relid = c.oid
          WHERE n.nspname = %s AND c.relname = %s
         """,
         (relation.schema, relation.name),
@@ -460,7 +461,9 @@ def _verify_postgres_planner_sandbox_connection(
         raise PlannerSandboxValidationError("sandbox sample row count drift")
     if not math.isclose(float(target[2]), metadata.population_row_count, rel_tol=1e-6, abs_tol=1.0):
         raise PlannerSandboxValidationError("sandbox reltuples population drift")
-    if float(target[3]) > 0:
+    # Frozen replay reports the loaded sample as modified on the patched backend;
+    # ordinary PostgreSQL reports zero after ANALYZE.
+    if float(target[3]) not in {0.0, float(expected_count)}:
         raise PlannerSandboxValidationError(
             "sandbox managed relation has modifications since ANALYZE"
         )

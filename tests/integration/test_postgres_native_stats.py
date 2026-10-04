@@ -83,11 +83,12 @@ def _snapshot() -> AdvisorSnapshot:
             pa.field("c", pa.string(), nullable=True),
         ]
     )
+    # Keep enough fixed rows for PostgreSQL 16.14 to materialize MCV payloads.
     table = pa.table(
         {
-            "a": pa.array([1, 1, 1, 2, 2, 2, 3, 3] * 3, type=pa.int32()),
-            "b": pa.array(["x", "x", "y", "x", "x", "y", "z", "z"] * 3),
-            "c": pa.array(["u", "u", "u", "v", "v", "v", "w", "w"] * 3),
+            "a": pa.array([1, 1, 1, 2, 2, 2, 3, 3] * 13, type=pa.int32()),
+            "b": pa.array(["x", "x", "y", "x", "x", "y", "z", "z"] * 13),
+            "c": pa.array(["u", "u", "u", "v", "v", "v", "w", "w"] * 13),
         },
         schema=schema,
     )
@@ -96,8 +97,8 @@ def _snapshot() -> AdvisorSnapshot:
         RelationName("Scratch Table", schema="public", catalog="postgres"),
         (
             ColumnSchema("a", 1, "int32", True, "integer"),
-            ColumnSchema("b", 2, "string", True, "text"),
-            ColumnSchema("c", 3, "string", True, "text"),
+            ColumnSchema("b", 2, "string", True, "text", 'pg_catalog."default"'),
+            ColumnSchema("c", 3, "string", True, "text", 'pg_catalog."default"'),
         ),
     )
     return AdvisorSnapshot(
@@ -138,7 +139,7 @@ def test_patched_postgres_materializes_one_fixed_sample_and_rolls_back(
         patched_postgres_dsn, snapshot, universe, statistics_target=100
     )
     assert first.analyze_count == 1
-    assert first.sample_row_count == 24
+    assert first.sample_row_count == 104
     assert first.population_row_count == 1000
     assert first.observed_reltuples == 1000
     assert first.ordinary_stats_fingerprint == second.ordinary_stats_fingerprint
@@ -222,7 +223,7 @@ def test_patched_planner_sandbox_is_catalogless_ordered_and_isolated(
     )
     assert prepared.metadata.sandbox_contract == "postgresql-planner-sandbox-v1"
     assert prepared.metadata.relation_name == snapshot.schemas[0].relation_name
-    assert prepared.metadata.sample_row_count == 24
+    assert prepared.metadata.sample_row_count == 104
     assert prepared.metadata.population_row_count == 1000
     assert prepared.metadata.repository_candidate_count == 6
     assert prepared.metadata.repository_present_count == 5
@@ -231,8 +232,8 @@ def test_patched_planner_sandbox_is_catalogless_ordered_and_isolated(
     verification = verify_postgres_planner_sandbox(
         patched_postgres_dsn, snapshot, universe, repository
     )
-    assert verification["target_sample_row_count"] == 24
-    assert verification["frozen_sample_row_count"] == 24
+    assert verification["target_sample_row_count"] == 104
+    assert verification["frozen_sample_row_count"] == 104
     assert verification["reltuples"] == 1000
     assert verification["ordinary_stats_fingerprint"] == repository.ordinary_stats_fingerprint
     assert verification["physical_extstats_count"] == 0
@@ -456,7 +457,7 @@ def test_patched_planner_sandbox_is_catalogless_ordered_and_isolated(
             session_a.connection.execute(
                 'SELECT count(*) FROM "public"."Scratch Table"'
             ).fetchone()[0]
-            == 24
+            == 104
         )
         session_a.activate(PostgresStatisticsConfiguration((mcv.candidate_id,)))
         post_commit_estimate = session_a.estimate_query("q1")
