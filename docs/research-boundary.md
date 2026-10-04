@@ -15,3 +15,7 @@ Research evaluation belongs in `pg-extstats-benchmarks`, which invokes this
 repository as a system under test. A production workload may contain sensitive
 SQL and sample values; the snapshot sensitivity declaration records that fact,
 but this bootstrap does not provide encryption or anonymization.
+
+Artifact IDs are restricted portable tokens. Native database names are not
+artifact IDs: relation names are structured `(catalog, schema, name)` values,
+and column names preserve their exact non-empty spelling.

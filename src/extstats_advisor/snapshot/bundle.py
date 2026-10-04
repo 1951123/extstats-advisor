@@ -20,8 +20,10 @@ from extstats_advisor.snapshot.model import (
     ColumnSchema,
     DBMSIdentity,
     PopulationMetadata,
+    RelationName,
     RelationSchema,
     SampleDescriptor,
+    SnapshotConsistency,
     Workload,
     WorkloadQuery,
 )
@@ -65,7 +67,13 @@ def _load_schema(value: dict[str, Any]) -> tuple[RelationSchema, ...]:
             raise SnapshotValidationError("schema relation requires columns")
         try:
             columns = tuple(ColumnSchema(**column) for column in raw["columns"])
-            result.append(RelationSchema(str(raw.get("relation_id")), columns))
+            result.append(
+                RelationSchema(
+                    str(raw.get("relation_id")),
+                    RelationName(**raw["relation_name"]),
+                    columns,
+                )
+            )
         except (TypeError, KeyError) as exc:
             raise SnapshotValidationError("invalid schema relation") from exc
     return tuple(result)
@@ -95,20 +103,17 @@ def _load_workload(value: dict[str, Any]) -> Workload:
         raise SnapshotValidationError("invalid workload") from exc
 
 
-def _semantic_payload(
-    schema_digest: str,
-    population_digest: str,
-    workload_digest: str,
-    descriptors: list[SampleDescriptor],
-) -> dict[str, Any]:
+def _semantic_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Return the explicit manifest subset whose meaning defines identity."""
+
     return {
-        "format_version": FORMAT_VERSION,
-        "schema_digest": schema_digest,
-        "population_digest": population_digest,
-        "workload_digest": workload_digest,
-        "samples": [
-            item.to_dict() for item in sorted(descriptors, key=lambda item: item.relation_id)
-        ],
+        "format_version": manifest["format_version"],
+        "dbms": manifest["dbms"],
+        "component_digests": manifest["component_digests"],
+        "sample_inventory": manifest["sample_inventory"],
+        "snapshot_consistency": manifest["snapshot_consistency"],
+        "semantic_provenance": manifest["semantic_provenance"],
+        "sensitivity": manifest["sensitivity"],
     }
 
 
@@ -169,26 +174,21 @@ def write_snapshot(snapshot: AdvisorSnapshot, destination: Path) -> str:
             "population.json": digest_json(population_json),
             "workload.json": digest_json(workload_json),
         }
-        semantic = _semantic_payload(
-            component_digests["schema.json"],
-            component_digests["population.json"],
-            component_digests["workload.json"],
-            descriptors,
-        )
         manifest = {
             "format_version": FORMAT_VERSION,
             "sealed": True,
-            "semantic_digest": digest_json(semantic),
             "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "dbms": snapshot.dbms.to_dict(),
-            "source_provenance": dict(snapshot.source_provenance),
             "component_digests": component_digests,
             "sample_inventory": [
                 item.to_dict() for item in sorted(descriptors, key=lambda item: item.relation_id)
             ],
-            "snapshot_consistency": "schema, population, workload, and all samples are one verified snapshot contract",
+            "snapshot_consistency": snapshot.consistency.to_dict(),
+            "semantic_provenance": dict(snapshot.semantic_provenance),
+            "runtime_metadata": dict(snapshot.runtime_metadata),
             "sensitivity": dict(snapshot.sensitivity),
         }
+        manifest["semantic_digest"] = digest_json(_semantic_manifest(manifest))
         (temporary / "manifest.json").write_bytes(canonical_json(manifest) + b"\n")
         validate_snapshot(temporary)
         os.replace(temporary, destination)
@@ -223,6 +223,8 @@ def validate_snapshot(path: Path) -> dict[str, Any]:
     if (
         not isinstance(manifest.get("dbms"), dict)
         or "sensitivity" not in manifest
+        or "semantic_provenance" not in manifest
+        or "runtime_metadata" not in manifest
         or "snapshot_consistency" not in manifest
     ):
         raise SnapshotValidationError("manifest is missing required declarations")
@@ -230,6 +232,13 @@ def validate_snapshot(path: Path) -> dict[str, Any]:
         DBMSIdentity(**manifest["dbms"])
     except (TypeError, KeyError) as exc:
         raise SnapshotValidationError("invalid DBMS identity") from exc
+    for field_name in ("semantic_provenance", "runtime_metadata", "sensitivity"):
+        if not isinstance(manifest[field_name], dict):
+            raise SnapshotValidationError(f"manifest field must be an object: {field_name}")
+    try:
+        SnapshotConsistency(**manifest["snapshot_consistency"])
+    except (TypeError, KeyError) as exc:
+        raise SnapshotValidationError("invalid snapshot consistency declaration") from exc
     components = {
         name: _json_read(_safe_regular_file(root, name))
         for name in ("schema.json", "population.json", "workload.json")
@@ -269,18 +278,14 @@ def validate_snapshot(path: Path) -> dict[str, Any]:
         _arrow_matches_schema(table, by_relation[descriptor.relation_id])
         if table.num_rows != descriptor.sample_row_count:
             raise SnapshotValidationError(f"sample row count mismatch: {descriptor.relation_id}")
-    semantic = _semantic_payload(
-        component_digests["schema.json"],
-        component_digests["population.json"],
-        component_digests["workload.json"],
-        list(descriptors),
-    )
-    if manifest.get("semantic_digest") != digest_json(semantic):
+    if manifest.get("semantic_digest") != digest_json(_semantic_manifest(manifest)):
         raise SnapshotValidationError("root semantic digest mismatch")
     return {
         "format_version": FORMAT_VERSION,
         "semantic_digest": manifest["semantic_digest"],
         "dbms": manifest["dbms"],
+        "relations": [item.to_dict() for item in schemas],
+        "snapshot_consistency": manifest["snapshot_consistency"],
         "relation_count": len(schemas),
         "sample_row_counts": {item.relation_id: item.sample_row_count for item in descriptors},
         "population": [item.to_dict() for item in populations],
@@ -307,12 +312,18 @@ def load_snapshot(path: Path) -> AdvisorSnapshot:
         dbms = DBMSIdentity(**manifest["dbms"])
     except (TypeError, KeyError) as exc:
         raise SnapshotValidationError("invalid DBMS identity") from exc
+    try:
+        consistency = SnapshotConsistency(**manifest["snapshot_consistency"])
+    except (TypeError, KeyError) as exc:
+        raise SnapshotValidationError("invalid snapshot consistency declaration") from exc
     return AdvisorSnapshot(
         schemas,
         populations,
         workload,
         samples,
         dbms,
-        manifest.get("source_provenance", {}),
+        consistency,
+        manifest.get("semantic_provenance", {}),
+        manifest.get("runtime_metadata", {}),
         manifest.get("sensitivity", {}),
     )

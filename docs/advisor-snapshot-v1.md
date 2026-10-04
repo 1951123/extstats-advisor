@@ -18,8 +18,11 @@ to be DBMS-independent logical-content digests.
 
 ## Components
 
-`schema.json` contains `relations[]`. Each relation has a portable
-`relation_id` and ordered `columns[]`. Each column has `name`, one-based
+`schema.json` contains `relations[]`. Each relation has a restricted opaque
+artifact `relation_id`, a structured `relation_name` object with optional
+`catalog` and `schema` plus required `name`, and ordered `columns[]`. Relation
+and column names are preserved exactly; no `schema.table` concatenation or
+database-specific identifier grammar is used. Each column has `name`, one-based
 `ordinal`, `arrow_type`, `nullable`, and optional `native_type` and
 `native_collation` annotations. PostgreSQL OIDs are not portable identities.
 
@@ -33,8 +36,9 @@ conceptually 1.0). Truth, exact cardinality, q-error, and benchmark labels are
 not fields of this contract.
 
 Each sample is an Apache Arrow IPC **file**. The manifest inventory records its
-relation, safe relative path, physical row count, `serialization`, payload
-SHA-256, PyArrow writer provenance, and `row_order_semantics = preserved`.
+opaque relation ID, safe relative path, positive physical row count,
+`serialization`, payload SHA-256, PyArrow writer provenance, and
+`row_order_semantics = preserved`.
 Arrow schema, typed values, NULLs, duplicate rows, and row order are
 authoritative.
 
@@ -42,10 +46,39 @@ authoritative.
 
 `manifest.json` records `format_version = advisor-snapshot-v1`, `sealed = true`,
 a root semantic digest, creation timestamp, DBMS identity, component digests,
-sample inventory, consistency declaration, sensitivity declaration, and source
-provenance. The semantic digest binds the format version, canonical component
-digests, and sample metadata including binary payload hashes. Runtime timestamp
-does not participate in the semantic digest.
+sample inventory, structured consistency declaration, semantic provenance,
+runtime metadata, and sensitivity declaration.
+
+The semantic manifest object is exactly the canonical object containing:
+
+- `format_version`;
+- `dbms`;
+- `component_digests` for schema, population, and workload;
+- `sample_inventory`, including payload hashes;
+- `snapshot_consistency`;
+- `semantic_provenance`; and
+- `sensitivity`.
+
+`created_at`, `sealed` (a validation gate), and `runtime_metadata` are
+explicitly non-semantic. Any mutation to a semantic field changes the root
+digest; an invalid consistency mode is rejected independently. Sensitivity and
+interpretation-affecting provenance are therefore not silently mutable.
+
+The v1 consistency object is:
+
+```json
+{
+  "mode": "consistent-source-view",
+  "db_derived_components": ["schema", "population", "samples"],
+  "workload_source": "external"
+}
+```
+
+It expresses one consistent source view for DB-derived components without
+encoding PostgreSQL transaction syntax. A v1 workload is externally supplied.
+
+Samples must contain at least one row, and a workload must contain at least one
+positive-weight query; zero-weight queries may coexist with positive queries.
 
 Writers create a temporary sibling directory, write components, verify all
 bindings, seal the manifest, perform final verification, and publish with

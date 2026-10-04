@@ -11,6 +11,7 @@ from extstats_advisor.snapshot.model import (
     ColumnSchema,
     DBMSIdentity,
     PopulationMetadata,
+    RelationName,
     RelationSchema,
     Workload,
     WorkloadQuery,
@@ -20,11 +21,11 @@ from extstats_advisor.snapshot.model import (
 def make_snapshot() -> tuple[AdvisorSnapshot, pa.Table]:
     schema = pa.schema(
         [
-            pa.field("i", pa.int64(), nullable=True),
-            pa.field("f", pa.float64(), nullable=True),
-            pa.field("d", pa.decimal128(10, 2), nullable=True),
-            pa.field("s", pa.string(), nullable=True),
-            pa.field("b", pa.bool_(), nullable=True),
+            pa.field("Customer ID", pa.int64(), nullable=True),
+            pa.field("amount", pa.float64(), nullable=True),
+            pa.field("decimal value", pa.decimal128(10, 2), nullable=True),
+            pa.field("客户", pa.string(), nullable=True),
+            pa.field("is active", pa.bool_(), nullable=True),
             pa.field("day", pa.date32(), nullable=True),
             pa.field("ts", pa.timestamp("us"), nullable=True),
             pa.field("tstz", pa.timestamp("us", tz="UTC"), nullable=True),
@@ -54,7 +55,8 @@ def make_snapshot() -> tuple[AdvisorSnapshot, pa.Table]:
         schema=schema,
     )
     logical = RelationSchema(
-        "public.events",
+        "rel_events_01",
+        RelationName("Order Facts", schema="Reporting.Schema"),
         tuple(
             ColumnSchema(field.name, index + 1, str(field.type), field.nullable)
             for index, field in enumerate(schema)
@@ -63,12 +65,12 @@ def make_snapshot() -> tuple[AdvisorSnapshot, pa.Table]:
     snapshot = AdvisorSnapshot(
         schemas=(logical,),
         populations=(
-            PopulationMetadata("public.events", 100000, "estimate", "read-only metadata"),
+            PopulationMetadata("rel_events_01", 100000, "estimate", "read-only metadata"),
         ),
         workload=Workload("workload-v1", (WorkloadQuery("q1", "SELECT 1", 1.0),)),
-        samples={"public.events": table},
+        samples={"rel_events_01": table},
         dbms=DBMSIdentity("example-db", "1"),
-        source_provenance={"acquisition": "offline fixture"},
+        semantic_provenance={"acquisition": "offline fixture"},
     )
     return snapshot, table
 
@@ -83,13 +85,16 @@ def test_typed_arrow_snapshot_roundtrip_preserves_values_order_nulls_and_duplica
     loaded = load_snapshot(path)
 
     assert digest == summary["semantic_digest"]
-    assert loaded.samples["public.events"].schema == table.schema
-    assert loaded.samples["public.events"].equals(table)
-    assert loaded.samples["public.events"].num_rows == 3
-    assert loaded.samples["public.events"].column("i").null_count == 1
+    assert loaded.schemas[0].relation_name == RelationName("Order Facts", schema="Reporting.Schema")
+    assert loaded.schemas[0].columns[0].name == "Customer ID"
+    assert loaded.schemas[0].columns[3].name == "客户"
+    assert loaded.samples["rel_events_01"].schema == table.schema
+    assert loaded.samples["rel_events_01"].equals(table)
+    assert loaded.samples["rel_events_01"].num_rows == 3
+    assert loaded.samples["rel_events_01"].column("Customer ID").null_count == 1
     assert (
-        loaded.samples["public.events"].column("s").to_pylist()[0]
-        == loaded.samples["public.events"].column("s").to_pylist()[2]
+        loaded.samples["rel_events_01"].column("客户").to_pylist()[0]
+        == loaded.samples["rel_events_01"].column("客户").to_pylist()[2]
     )
 
 

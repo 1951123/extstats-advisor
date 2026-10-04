@@ -13,6 +13,16 @@ population metadata, and `W` is representative workload. The advisor does not
 require a replica of the production database. Native DBMS statistics and
 planning will be added by later backend units.
 
+Portable artifact IDs such as relation IDs, workload IDs, and query IDs are
+restricted stable tokens. Database object names are different: relation names
+are structured `(catalog, schema, name)` values and column names are losslessly
+preserved non-empty strings, including spaces, punctuation, case, and Unicode.
+
+The sealed root identity binds the format version, DBMS identity, component
+digests, sample inventory and payload hashes, structured snapshot consistency,
+semantic provenance, and sensitivity declaration. Creation time and explicitly
+named runtime metadata are non-semantic.
+
 The historical `/home/wqts/projects/pg-extstats-advisor` repository is the
 research prototype. `pg-extstats-benchmarks` owns research datasets, exact
 truth, experiment protocols, and paper evaluation. This repository does not

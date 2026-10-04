@@ -26,6 +26,13 @@ Mandatory invariants:
     `B_opt != B_maint`.
 11. Artifact validation fails closed.
 12. Artifact contracts never use pickle or arbitrary-code serialization.
+13. Portable artifact IDs are restricted tokens, but native database relation
+    and column names are structured/lossless data and must not be parsed as
+    `schema.table` strings.
+14. The snapshot root semantic identity must be computed from one explicit
+    canonical semantic-manifest object. Runtime metadata and creation time are
+    non-semantic; DBMS identity, consistency, semantic provenance, and
+    sensitivity are semantic.
 
 Bootstrap scope intentionally excludes PostgreSQL extraction, planner
 sandboxing, candidate generation, search, parallel pools, deployment, and

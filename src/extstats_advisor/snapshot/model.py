@@ -44,6 +44,24 @@ class DBMSIdentity:
 
 
 @dataclass(frozen=True, slots=True)
+class RelationName:
+    """Lossless logical database name; no DBMS identifier grammar is imposed."""
+
+    name: str
+    schema: str | None = None
+    catalog: str | None = None
+
+    def __post_init__(self) -> None:
+        _text(self.name, "relation name")
+        for value, label in ((self.schema, "relation schema"), (self.catalog, "relation catalog")):
+            if value is not None:
+                _text(value, label)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"catalog": self.catalog, "schema": self.schema, "name": self.name}
+
+
+@dataclass(frozen=True, slots=True)
 class ColumnSchema:
     name: str
     ordinal: int
@@ -53,7 +71,7 @@ class ColumnSchema:
     native_collation: str | None = None
 
     def __post_init__(self) -> None:
-        _identifier(self.name, "column name")
+        _text(self.name, "column name")
         if not isinstance(self.ordinal, int) or self.ordinal < 1:
             raise SnapshotValidationError("column ordinal must be positive")
         _text(self.arrow_type, "Arrow type")
@@ -83,6 +101,7 @@ class ColumnSchema:
 @dataclass(frozen=True, slots=True)
 class RelationSchema:
     relation_id: str
+    relation_name: RelationName
     columns: tuple[ColumnSchema, ...]
 
     def __post_init__(self) -> None:
@@ -101,6 +120,7 @@ class RelationSchema:
     def to_dict(self) -> dict[str, Any]:
         return {
             "relation_id": self.relation_id,
+            "relation_name": self.relation_name.to_dict(),
             "columns": [column.to_dict() for column in self.columns],
         }
 
@@ -169,6 +189,10 @@ class Workload:
         ids = [query.query_id for query in self.queries]
         if len(ids) != len(set(ids)):
             raise SnapshotValidationError("workload query IDs must be unique")
+        if not any(query.weight > 0 for query in self.queries):
+            raise SnapshotValidationError(
+                "workload must contain at least one positive-weight query"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         value = {
@@ -193,8 +217,8 @@ class SampleDescriptor:
     def __post_init__(self) -> None:
         _identifier(self.relation_id, "sample relation ID")
         _text(self.relative_path, "sample relative path")
-        if not isinstance(self.sample_row_count, int) or self.sample_row_count < 0:
-            raise SnapshotValidationError("sample_row_count must be non-negative")
+        if not isinstance(self.sample_row_count, int) or self.sample_row_count < 1:
+            raise SnapshotValidationError("sample_row_count must be positive")
         if self.serialization != "arrow-ipc-file" or not re.fullmatch(
             r"[0-9a-f]{64}", self.payload_sha256
         ):
@@ -221,7 +245,9 @@ class AdvisorSnapshot:
     workload: Workload
     samples: Mapping[str, Any]
     dbms: DBMSIdentity
-    source_provenance: Mapping[str, Any] = field(default_factory=dict)
+    consistency: SnapshotConsistency = field(default_factory=lambda: SnapshotConsistency())
+    semantic_provenance: Mapping[str, Any] = field(default_factory=dict)
+    runtime_metadata: Mapping[str, Any] = field(default_factory=dict)
     sensitivity: Mapping[str, Any] = field(
         default_factory=lambda: {
             "contains_production_sensitive_values": True,
@@ -246,3 +272,29 @@ class AdvisorSnapshot:
     @property
     def schema_by_id(self) -> dict[str, RelationSchema]:
         return {item.relation_id: item for item in self.schemas}
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotConsistency:
+    """DBMS-neutral consistency declaration for snapshot acquisition."""
+
+    mode: str = "consistent-source-view"
+    db_derived_components: tuple[str, ...] = ("schema", "population", "samples")
+    workload_source: str = "external"
+
+    def __post_init__(self) -> None:
+        if self.mode != "consistent-source-view":
+            raise SnapshotValidationError(f"unknown snapshot consistency mode: {self.mode}")
+        if tuple(self.db_derived_components) != ("schema", "population", "samples"):
+            raise SnapshotValidationError(
+                "snapshot consistency must cover schema, population, and samples"
+            )
+        if self.workload_source != "external":
+            raise SnapshotValidationError("AdvisorSnapshot v1 requires an external workload source")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "db_derived_components": list(self.db_derived_components),
+            "workload_source": self.workload_source,
+        }
