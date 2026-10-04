@@ -41,6 +41,10 @@ Baseline + every PRESENT singleton
     v
 SingletonProfile v1 -> frozen utility precedence
 
+SingletonProfile v1 + OptimizationBudget v1
+    v
+OptimizationPlan v1 -> screened frozen prefix
+
 [future] objective -> optimizer/search
 ```
 
@@ -65,7 +69,9 @@ candidates as baseline-equivalent without planner EXPLAIN calls, and freezes
 the order by descending exact improvement, static precedence rank, then
 candidate ID. For a later admitted set M, the defined order is the restriction
 of this frozen order to M; this stage does not perform screening, search, or
-deployment.
+deployment. The next boundary is pure budgeted screening: it takes the exact
+frozen PRESENT prefix under `candidate_limit`, preserves negative and neutral
+singletons, excludes `ABSENT_NATIVE`, and performs no planner or utility calls.
 The static PostgreSQL precedence in `CandidateUniverse v1` is deterministic
 artifact ordering only, not final planner-visible statistics order.
 

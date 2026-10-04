@@ -35,8 +35,15 @@ from extstats_advisor.ground_truth import (
 from extstats_advisor.native_stats.repository import load_native_stats_repository
 from extstats_advisor.optimization.artifact import (
     inspect_singleton_profile,
+    load_singleton_profile,
     validate_singleton_profile,
     write_singleton_profile,
+)
+from extstats_advisor.optimization.plan import create_optimization_plan
+from extstats_advisor.optimization.plan_artifact import (
+    inspect_optimization_plan,
+    validate_optimization_plan,
+    write_optimization_plan,
 )
 from extstats_advisor.snapshot.bundle import load_snapshot, validate_snapshot, write_snapshot
 from extstats_advisor.utility import QErrorLoss, WeightedWorkloadUtility
@@ -138,6 +145,26 @@ def _parser() -> argparse.ArgumentParser:
     validate_profile.add_argument("--ground-truth", required=True, type=Path)
     inspect_profile = profiling_commands.add_parser("inspect")
     inspect_profile.add_argument("profile", type=Path)
+    optimization = commands.add_parser("optimization")
+    optimization_commands = optimization.add_subparsers(dest="optimization_command", required=True)
+    plan = optimization_commands.add_parser("plan")
+    plan.add_argument("snapshot", type=Path)
+    plan.add_argument("candidate_universe", type=Path)
+    plan.add_argument("native_repository", type=Path)
+    plan.add_argument("ground_truth", type=Path)
+    plan.add_argument("singleton_profile", type=Path)
+    plan.add_argument("--candidate-limit", required=True, type=int)
+    plan.add_argument("--wall-clock-seconds", default=300.0, type=float)
+    plan.add_argument("--output", required=True, type=Path)
+    validate_plan = optimization_commands.add_parser("validate")
+    validate_plan.add_argument("optimization_plan", type=Path)
+    validate_plan.add_argument("--snapshot", required=True, type=Path)
+    validate_plan.add_argument("--candidate-universe", required=True, type=Path)
+    validate_plan.add_argument("--native-repository", required=True, type=Path)
+    validate_plan.add_argument("--ground-truth", required=True, type=Path)
+    validate_plan.add_argument("--singleton-profile", required=True, type=Path)
+    inspect_plan = optimization_commands.add_parser("inspect")
+    inspect_plan.add_argument("optimization_plan", type=Path)
     return parser
 
 
@@ -329,6 +356,58 @@ def main(argv: list[str] | None = None) -> int:
                         "status": "profiled",
                         "output": str(args.output),
                         **inspect_singleton_profile(args.output),
+                        "semantic_digest": digest,
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
+        if args.command == "optimization":
+            if args.optimization_command == "inspect":
+                print(
+                    json.dumps(
+                        inspect_optimization_plan(args.optimization_plan), sort_keys=True, indent=2
+                    )
+                )
+                return 0
+            snapshot = load_snapshot(args.snapshot)
+            universe = load_candidate_universe(args.candidate_universe, snapshot)
+            repository = load_native_stats_repository(args.native_repository)
+            ground_truth = load_ground_truth_set(args.ground_truth, snapshot)
+            singleton_profile = load_singleton_profile(args.singleton_profile)
+            validate_singleton_profile(
+                args.singleton_profile, snapshot, universe, repository, ground_truth
+            )
+            if args.optimization_command == "validate":
+                print(
+                    json.dumps(
+                        {
+                            "status": "valid",
+                            **validate_optimization_plan(
+                                args.optimization_plan,
+                                snapshot,
+                                universe,
+                                repository,
+                                ground_truth,
+                                singleton_profile,
+                            ),
+                        },
+                        sort_keys=True,
+                    )
+                )
+                return 0
+            plan = create_optimization_plan(
+                singleton_profile,
+                candidate_limit=args.candidate_limit,
+                wall_clock_seconds=args.wall_clock_seconds,
+            )
+            digest = write_optimization_plan(plan, args.output)
+            print(
+                json.dumps(
+                    {
+                        "status": "planned",
+                        "output": str(args.output),
+                        **inspect_optimization_plan(args.output),
                         "semantic_digest": digest,
                     },
                     sort_keys=True,

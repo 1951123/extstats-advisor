@@ -67,3 +67,11 @@ class SingletonProfilingError(ExtStatsAdvisorError):
 
 class SingletonProfileValidationError(SingletonProfilingError):
     """Raised when a SingletonProfile artifact is malformed or incompatible."""
+
+
+class OptimizationPlanningError(ExtStatsAdvisorError):
+    """Raised when an optimization budget or plan cannot be created safely."""
+
+
+class OptimizationPlanValidationError(OptimizationPlanningError):
+    """Raised when an OptimizationPlan artifact is malformed or incompatible."""

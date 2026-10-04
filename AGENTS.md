@@ -62,6 +62,7 @@ top-K restriction, search, recommendation, or deployment.
 
 Current scope includes PostgreSQL snapshot acquisition, an explicit
 production-exact GroundTruthSet utility reference, offline candidate
-generation, the sample-only planner sandbox, and singleton utility profiling
-with a frozen precedence artifact. Screening, search, parallel pools,
-deployment, and maintenance budgeting remain excluded.
+generation, the sample-only planner sandbox, singleton utility profiling with
+a frozen precedence artifact, and pure budgeted OptimizationPlan screening.
+Greedy search, parallel pools, recommendation, deployment, and maintenance
+budgeting remain excluded.
