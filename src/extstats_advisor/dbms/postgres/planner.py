@@ -154,6 +154,18 @@ class PostgresPlannerSession:
         ).fetchone()[0]
         return () if active is None else tuple(int(value) for value in active)
 
+    def set_statement_timeout_ms(self, timeout_ms: int) -> None:
+        """Set a transaction-local timeout for one bounded search operation."""
+
+        if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or timeout_ms < 1:
+            raise PlannerSandboxError("statement timeout must be a positive integer")
+        if timeout_ms > 2_147_483_647:
+            raise PlannerSandboxError("statement timeout exceeds PostgreSQL limit")
+        self.connection.execute(
+            "SELECT pg_catalog.set_config('statement_timeout', %s, true)",
+            (str(timeout_ms),),
+        )
+
     def open(self) -> None:
         if self._connection is not None:
             raise PlannerSandboxError("planner session is already open")

@@ -23,6 +23,7 @@ from extstats_advisor.dbms.postgres import (
     destroy_postgres_planner_sandbox,
     prepare_postgres_planner_sandbox,
     profile_postgres_singletons,
+    search_postgres_greedy_add,
     verify_postgres_planner_sandbox,
 )
 from extstats_advisor.dbms.postgres.acquisition import _workload_from_path
@@ -42,8 +43,14 @@ from extstats_advisor.optimization.artifact import (
 from extstats_advisor.optimization.plan import create_optimization_plan
 from extstats_advisor.optimization.plan_artifact import (
     inspect_optimization_plan,
+    load_optimization_plan,
     validate_optimization_plan,
     write_optimization_plan,
+)
+from extstats_advisor.optimization.search_artifact import (
+    inspect_search_result,
+    validate_search_result,
+    write_search_result,
 )
 from extstats_advisor.snapshot.bundle import load_snapshot, validate_snapshot, write_snapshot
 from extstats_advisor.utility import QErrorLoss, WeightedWorkloadUtility
@@ -165,6 +172,29 @@ def _parser() -> argparse.ArgumentParser:
     validate_plan.add_argument("--singleton-profile", required=True, type=Path)
     inspect_plan = optimization_commands.add_parser("inspect")
     inspect_plan.add_argument("optimization_plan", type=Path)
+    search = optimization_commands.add_parser("search")
+    search_commands = search.add_subparsers(dest="search_command", required=True)
+    search_postgres = search_commands.add_parser("postgres")
+    search_postgres.add_argument("snapshot", type=Path)
+    search_postgres.add_argument("candidate_universe", type=Path)
+    search_postgres.add_argument("native_repository", type=Path)
+    search_postgres.add_argument("ground_truth", type=Path)
+    search_postgres.add_argument("singleton_profile", type=Path)
+    search_postgres.add_argument("optimization_plan", type=Path)
+    search_postgres.add_argument(
+        "--dsn", default=os.environ.get("EXTSTATS_ADVISOR_PATCHED_POSTGRES_DSN")
+    )
+    search_postgres.add_argument("--output", required=True, type=Path)
+    validate_search = search_commands.add_parser("validate")
+    validate_search.add_argument("search_result", type=Path)
+    validate_search.add_argument("--snapshot", required=True, type=Path)
+    validate_search.add_argument("--candidate-universe", required=True, type=Path)
+    validate_search.add_argument("--native-repository", required=True, type=Path)
+    validate_search.add_argument("--ground-truth", required=True, type=Path)
+    validate_search.add_argument("--singleton-profile", required=True, type=Path)
+    validate_search.add_argument("--optimization-plan", required=True, type=Path)
+    inspect_search = search_commands.add_parser("inspect")
+    inspect_search.add_argument("search_result", type=Path)
     return parser
 
 
@@ -367,6 +397,85 @@ def main(argv: list[str] | None = None) -> int:
                 print(
                     json.dumps(
                         inspect_optimization_plan(args.optimization_plan), sort_keys=True, indent=2
+                    )
+                )
+                return 0
+            if args.optimization_command == "search":
+                if args.search_command == "inspect":
+                    print(
+                        json.dumps(
+                            inspect_search_result(args.search_result), sort_keys=True, indent=2
+                        )
+                    )
+                    return 0
+                snapshot = load_snapshot(args.snapshot)
+                universe = load_candidate_universe(args.candidate_universe, snapshot)
+                repository = load_native_stats_repository(args.native_repository)
+                ground_truth = load_ground_truth_set(args.ground_truth, snapshot)
+                singleton_profile = load_singleton_profile(args.singleton_profile)
+                optimization_plan = load_optimization_plan(args.optimization_plan)
+                validate_singleton_profile(
+                    args.singleton_profile, snapshot, universe, repository, ground_truth
+                )
+                validate_optimization_plan(
+                    args.optimization_plan,
+                    snapshot,
+                    universe,
+                    repository,
+                    ground_truth,
+                    singleton_profile,
+                )
+                if args.search_command == "validate":
+                    print(
+                        json.dumps(
+                            {
+                                "status": "valid",
+                                **validate_search_result(
+                                    args.search_result,
+                                    snapshot,
+                                    universe,
+                                    repository,
+                                    ground_truth,
+                                    singleton_profile,
+                                    optimization_plan,
+                                ),
+                            },
+                            sort_keys=True,
+                        )
+                    )
+                    return 0
+                if not args.dsn:
+                    raise ExtStatsAdvisorError(
+                        "patched PostgreSQL DSN is required via --dsn or "
+                        "EXTSTATS_ADVISOR_PATCHED_POSTGRES_DSN"
+                    )
+                utility_provider = WeightedWorkloadUtility(
+                    snapshot.workload,
+                    ArtifactGroundTruthProvider(ground_truth),
+                    QErrorLoss(),
+                )
+                with PostgresPlannerSession(
+                    args.dsn, snapshot, universe, repository
+                ) as planner_session:
+                    result = search_postgres_greedy_add(
+                        planner_session,
+                        snapshot,
+                        universe,
+                        repository,
+                        singleton_profile,
+                        optimization_plan,
+                        utility_provider,
+                    )
+                digest = write_search_result(result, args.output)
+                print(
+                    json.dumps(
+                        {
+                            "status": "searched",
+                            "output": str(args.output),
+                            **inspect_search_result(args.output),
+                            "semantic_digest": digest,
+                        },
+                        sort_keys=True,
                     )
                 )
                 return 0

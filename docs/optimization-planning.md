@@ -64,12 +64,14 @@ This is a capacity-planning upper bound only. Strict-improvement stopping or
 future wall-clock expiry can reduce actual evaluations; it does not alter
 `candidate_limit`.
 
-The future greedy ADD contract is documented here but is not implemented in
-this unit. It will reuse singleton objectives for the first round, accept only
-strictly improving candidates, preserve the plan's frozen order, and retain
-the last fully accepted configuration if an ADD round expires halfway through.
-Here, “top-K” means screened search-space width only—not candidate generation,
-recommendation, or the final selected configuration.
+The downstream greedy ADD search reuses singleton objectives for its first
+round, accepts only strictly improving candidates, preserves the plan's frozen
+order, and retains the last fully accepted configuration if an ADD round
+expires halfway through. Here, “top-K” means screened search-space width
+only—not candidate generation, recommendation, or the final selected
+configuration.
 
 The production CLI provides `optimization plan`, `optimization validate`, and
-`optimization inspect`. None requires a DSN or starts PostgreSQL.
+`optimization inspect` without a DSN. `optimization search postgres` consumes a
+validated plan and runs the live serial search; its budget cannot be overridden
+by search flags.

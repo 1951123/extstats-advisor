@@ -34,6 +34,7 @@ from extstats_advisor.dbms.postgres.sandbox import (
     prepare_postgres_planner_sandbox,
     verify_postgres_planner_sandbox,
 )
+from extstats_advisor.dbms.postgres.search import search_postgres_greedy_add
 
 __all__ = [
     "POSTGRES_PLANNER_SANDBOX_CONTRACT",
@@ -58,5 +59,6 @@ __all__ = [
     "materialize_postgresql_native_stats",
     "prepare_postgres_planner_sandbox",
     "profile_postgres_singletons",
+    "search_postgres_greedy_add",
     "verify_postgres_planner_sandbox",
 ]

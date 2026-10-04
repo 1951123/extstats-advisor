@@ -18,6 +18,7 @@ from extstats_advisor.dbms.postgres.sandbox import (
     prepare_postgres_planner_sandbox,
     verify_postgres_planner_sandbox,
 )
+from extstats_advisor.dbms.postgres.search import search_postgres_greedy_add
 from extstats_advisor.errors import PlannerSandboxValidationError
 from extstats_advisor.ground_truth import (
     PRODUCTION_EXACT_SOURCE,
@@ -38,6 +39,17 @@ from extstats_advisor.optimization.artifact import (
     load_singleton_profile,
     validate_singleton_profile,
     write_singleton_profile,
+)
+from extstats_advisor.optimization.plan import create_optimization_plan
+from extstats_advisor.optimization.plan_artifact import (
+    load_optimization_plan,
+    validate_optimization_plan,
+    write_optimization_plan,
+)
+from extstats_advisor.optimization.search_artifact import (
+    load_search_result,
+    validate_search_result,
+    write_search_result,
 )
 from extstats_advisor.snapshot.bundle import load_snapshot, write_snapshot
 from extstats_advisor.snapshot.model import (
@@ -285,6 +297,72 @@ def test_patched_planner_sandbox_is_catalogless_ordered_and_isolated(
     assert profile_by_id[absent.candidate_id].improvement == 0
     assert profile_by_id[absent.candidate_id].frozen_precedence_rank is None
     assert absent.candidate_id not in first_profile.frozen_ordered_candidate_ids
+
+    plan = create_optimization_plan(first_profile, candidate_limit=5)
+    plan_path = tmp_path / "optimization-plan-v1.json"
+    write_optimization_plan(plan, plan_path)
+    validate_optimization_plan(
+        plan_path, snapshot, universe, repository, loaded_truth, first_profile
+    )
+    loaded_plan = load_optimization_plan(plan_path)
+    assert loaded_plan.screened_candidate_ids == first_profile.frozen_ordered_candidate_ids
+
+    search_results = []
+    for index in (1, 2):
+        with PostgresPlannerSession(
+            patched_postgres_dsn, snapshot, universe, repository
+        ) as search_session:
+            result = search_postgres_greedy_add(
+                search_session,
+                snapshot,
+                universe,
+                repository,
+                first_profile,
+                loaded_plan,
+                utility,
+            )
+        result_path = tmp_path / f"search-result-{index}.json"
+        write_search_result(result, result_path)
+        validate_search_result(
+            result_path,
+            snapshot,
+            universe,
+            repository,
+            loaded_truth,
+            first_profile,
+            loaded_plan,
+        )
+        search_results.append(load_search_result(result_path))
+
+    first_result, second_result = search_results
+    assert first_result.semantic_digest == second_result.semantic_digest
+    assert first_result.final_objective <= first_result.baseline_objective
+    assert set(first_result.final_ordered_candidate_ids) <= set(loaded_plan.screened_candidate_ids)
+    assert first_result.final_ordered_candidate_ids == loaded_plan.ordered_configuration(
+        first_result.final_ordered_candidate_ids
+    )
+    assert all(move.objective_after < move.objective_before for move in first_result.accepted_moves)
+    assert first_result.runtime_metadata["cached_singleton_configuration_count"] == 5
+    assert (
+        first_result.runtime_metadata["planner_query_estimate_count"]
+        == (first_result.runtime_metadata["live_configuration_evaluation_count"])
+    )
+    best_singleton = min(
+        first_profile.candidate_profiles,
+        key=lambda candidate: (candidate.singleton_objective, candidate.frozen_precedence_rank),
+    )
+    assert best_singleton.candidate_id == mcv.candidate_id
+    assert first_result.accepted_moves[0].added_candidate_id == mcv.candidate_id
+
+    with psycopg.connect(patched_postgres_dsn, autocommit=True) as connection:
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM pg_catalog.pg_statistic_ext "
+                "WHERE stxname LIKE 'extstats_adv_stat_%'"
+            ).fetchone()[0]
+            == 0
+        )
+
     second_present = next(
         candidate
         for candidate in repository.candidate_models

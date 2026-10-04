@@ -75,3 +75,15 @@ class OptimizationPlanningError(ExtStatsAdvisorError):
 
 class OptimizationPlanValidationError(OptimizationPlanningError):
     """Raised when an OptimizationPlan artifact is malformed or incompatible."""
+
+
+class SearchError(ExtStatsAdvisorError):
+    """Raised when a configuration search cannot complete safely."""
+
+
+class SearchBudgetExpired(SearchError):
+    """Raised when the search deadline expires before a configuration is complete."""
+
+
+class SearchResultValidationError(SearchError):
+    """Raised when a SearchResult artifact is malformed or incompatible."""

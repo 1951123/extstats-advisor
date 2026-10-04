@@ -45,7 +45,24 @@ SingletonProfile v1 + OptimizationBudget v1
     v
 OptimizationPlan v1 -> screened frozen prefix
 
-[future] objective -> optimizer/search
+    v
+Greedy ADD SearchResult v1
+
+The production optimization pipeline is therefore:
+
+```text
+CandidateUniverse
+ -> NativeStatsRepository
+ -> PlannerSandbox
+ -> GroundTruth/Utility
+ -> SingletonProfile
+ -> OptimizationPlan
+ -> Greedy ADD SearchResult
+```
+
+Search v1 is serial and consumes one verified planner session. Parallel
+workers, DROP/SWAP moves, deployment recommendations, and maintenance budgets
+remain outside this stage.
 ```
 
 The implementation includes the sealed snapshot contract, typed Arrow sample
