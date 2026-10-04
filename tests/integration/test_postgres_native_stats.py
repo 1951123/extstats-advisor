@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pyarrow as pa
@@ -7,6 +8,17 @@ import pytest
 
 from extstats_advisor.candidates.universe import derive_candidate_universe
 from extstats_advisor.dbms.postgres.native_stats import materialize_native_stats
+from extstats_advisor.dbms.postgres.planner import (
+    PostgresPlannerSession,
+    PostgresStatisticsConfiguration,
+)
+from extstats_advisor.dbms.postgres.sandbox import (
+    destroy_postgres_planner_sandbox,
+    prepare_postgres_planner_sandbox,
+    verify_postgres_planner_sandbox,
+)
+from extstats_advisor.errors import PlannerSandboxValidationError
+from extstats_advisor.native_stats.model import ABSENT_NATIVE, NativeStatsCandidate
 from extstats_advisor.native_stats.repository import (
     load_native_stats_repository,
     validate_native_stats_repository,
@@ -45,7 +57,7 @@ def _snapshot() -> AdvisorSnapshot:
     )
     relation = RelationSchema(
         "rel_patched_01",
-        RelationName("Scratch Table", schema="public"),
+        RelationName("Scratch Table", schema="public", catalog="postgres"),
         (
             ColumnSchema("a", 1, "int32", True, "integer"),
             ColumnSchema("b", 2, "string", True, "text"),
@@ -60,7 +72,8 @@ def _snapshot() -> AdvisorSnapshot:
             (
                 WorkloadQuery(
                     "q1",
-                    'SELECT * FROM "public"."Scratch Table" WHERE "a" = 1 AND "b" = 2 AND "c" = 3',
+                    'SELECT * FROM "public"."Scratch Table" '
+                    'WHERE "a" = 1 AND "b" = \'x\' AND "c" = \'u\'',
                 ),
             ),
         ),
@@ -121,4 +134,137 @@ def test_patched_postgres_materializes_one_fixed_sample_and_rolls_back(
                 "SELECT count(*) FROM pg_catalog.pg_class WHERE relname LIKE 'extstats_adv_target_%'"
             ).fetchone()[0]
             == 0
+        )
+
+
+def _repository_with_absent_candidate(materialization):
+    absent_id = next(
+        candidate.candidate_id
+        for candidate in materialization.candidates
+        if candidate.kind == "postgresql.dependencies"
+    )
+    candidates = tuple(
+        NativeStatsCandidate(
+            candidate.candidate_id,
+            candidate.relation_id,
+            candidate.kind,
+            candidate.column_ordinals,
+            candidate.column_names,
+            ABSENT_NATIVE if candidate.candidate_id == absent_id else candidate.state,
+            None if candidate.candidate_id == absent_id else candidate.serialization,
+            0 if candidate.candidate_id == absent_id else candidate.payload_size,
+            None if candidate.candidate_id == absent_id else candidate.payload_sha256,
+            None if candidate.candidate_id == absent_id else candidate.payload_path,
+        )
+        for candidate in materialization.candidates
+    )
+    payloads = dict(materialization.payloads)
+    payloads[absent_id] = b""
+    return replace(materialization, candidates=candidates, payloads=payloads)
+
+
+def test_patched_planner_sandbox_is_catalogless_ordered_and_isolated(
+    patched_postgres_dsn: str, tmp_path: Path
+) -> None:
+    import psycopg
+
+    snapshot_path = tmp_path / "snapshot"
+    write_snapshot(_snapshot(), snapshot_path)
+    snapshot = load_snapshot(snapshot_path)
+    universe = derive_candidate_universe(snapshot)
+    materialization = materialize_native_stats(patched_postgres_dsn, snapshot, universe)
+    repository_materialization = _repository_with_absent_candidate(materialization)
+    repository_path = tmp_path / "native"
+    write_native_stats_repository(repository_materialization, repository_path)
+    repository = load_native_stats_repository(repository_path)
+
+    prepared = prepare_postgres_planner_sandbox(
+        patched_postgres_dsn, snapshot, universe, repository
+    )
+    assert prepared.metadata.sandbox_contract == "postgresql-planner-sandbox-v1"
+    assert prepared.metadata.relation_name == snapshot.schemas[0].relation_name
+    assert prepared.metadata.sample_row_count == 24
+    assert prepared.metadata.population_row_count == 1000
+    assert prepared.metadata.repository_candidate_count == 6
+    assert prepared.metadata.repository_present_count == 5
+    assert prepared.metadata.repository_absent_count == 1
+
+    verification = verify_postgres_planner_sandbox(
+        patched_postgres_dsn, snapshot, universe, repository
+    )
+    assert verification["target_sample_row_count"] == 24
+    assert verification["frozen_sample_row_count"] == 24
+    assert verification["reltuples"] == 1000
+    assert verification["ordinary_stats_fingerprint"] == repository.ordinary_stats_fingerprint
+    assert verification["physical_extstats_count"] == 0
+    assert verification["autovacuum_disabled"] is True
+
+    mcv = next(
+        candidate
+        for candidate in repository.candidate_models
+        if candidate.kind == "postgresql.mcv" and candidate.column_ordinals == (1, 2)
+    )
+    absent = next(
+        candidate for candidate in repository.candidate_models if candidate.state == ABSENT_NATIVE
+    )
+    second_present = next(
+        candidate
+        for candidate in repository.candidate_models
+        if candidate.state == "present" and candidate.candidate_id != mcv.candidate_id
+    )
+    with PostgresPlannerSession(patched_postgres_dsn, snapshot, universe, repository) as session_a:
+        session_a.activate(PostgresStatisticsConfiguration())
+        baseline = session_a.estimate_query("q1")
+        session_a.activate(PostgresStatisticsConfiguration((mcv.candidate_id,)))
+        mcv_estimate = session_a.estimate_query("q1")
+        assert mcv_estimate.estimated_rows > baseline.estimated_rows
+        session_a.activate(
+            PostgresStatisticsConfiguration((mcv.candidate_id, second_present.candidate_id))
+        )
+        ordered_ab = session_a.active_backend_oids()
+        session_a.activate(
+            PostgresStatisticsConfiguration((second_present.candidate_id, mcv.candidate_id))
+        )
+        ordered_ba = session_a.active_backend_oids()
+        assert ordered_ab == (
+            session_a.registered_oids[mcv.candidate_id],
+            session_a.registered_oids[second_present.candidate_id],
+        )
+        assert ordered_ba == (
+            session_a.registered_oids[second_present.candidate_id],
+            session_a.registered_oids[mcv.candidate_id],
+        )
+        session_a.activate(PostgresStatisticsConfiguration((mcv.candidate_id,)))
+        with PostgresPlannerSession(
+            patched_postgres_dsn, snapshot, universe, repository
+        ) as session_b:
+            assert session_b.active_backend_oids() == ()
+            session_b.activate(PostgresStatisticsConfiguration((second_present.candidate_id,)))
+            assert session_a.active_backend_oids() == (session_a.registered_oids[mcv.candidate_id],)
+            assert session_b.active_backend_oids() == (
+                session_b.registered_oids[second_present.candidate_id],
+            )
+        session_a.activate(PostgresStatisticsConfiguration((absent.candidate_id,)))
+        absent_estimate = session_a.estimate_query("q1")
+        assert absent_estimate.estimated_rows == baseline.estimated_rows
+
+    with psycopg.connect(patched_postgres_dsn, autocommit=True) as connection:
+        connection.execute("INSERT INTO \"public\".\"Scratch Table\" VALUES (9, 'z', 'z')")
+    with pytest.raises(PlannerSandboxValidationError, match="sample row count drift"):
+        verify_postgres_planner_sandbox(patched_postgres_dsn, snapshot, universe, repository)
+
+    destroyed = destroy_postgres_planner_sandbox(patched_postgres_dsn)
+    assert destroyed["destroyed"] is True
+    with psycopg.connect(patched_postgres_dsn, autocommit=True) as connection:
+        assert (
+            connection.execute("SELECT to_regclass(%s)", ('"public"."Scratch Table"',)).fetchone()[
+                0
+            ]
+            is None
+        )
+        assert (
+            connection.execute(
+                "SELECT to_regclass(%s)", ("extstats_advisor_internal.sandbox_metadata",)
+            ).fetchone()[0]
+            is None
         )

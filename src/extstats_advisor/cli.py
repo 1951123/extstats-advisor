@@ -11,13 +11,22 @@ from pathlib import Path
 from extstats_advisor import __version__
 from extstats_advisor.candidates import (
     derive_candidate_universe,
+    load_candidate_universe,
     validate_candidate_universe,
     write_candidate_universe,
 )
 from extstats_advisor.dbms.base import AcquisitionRequest, SamplePolicy
-from extstats_advisor.dbms.postgres import PostgresSnapshotAcquirer
+from extstats_advisor.dbms.postgres import (
+    PostgresPlannerSession,
+    PostgresSnapshotAcquirer,
+    PostgresStatisticsConfiguration,
+    destroy_postgres_planner_sandbox,
+    prepare_postgres_planner_sandbox,
+    verify_postgres_planner_sandbox,
+)
 from extstats_advisor.dbms.postgres.acquisition import _workload_from_path
 from extstats_advisor.errors import ExtStatsAdvisorError
+from extstats_advisor.native_stats.repository import load_native_stats_repository
 from extstats_advisor.snapshot.bundle import load_snapshot, validate_snapshot, write_snapshot
 
 
@@ -49,6 +58,37 @@ def _parser() -> argparse.ArgumentParser:
         command = candidate_commands.add_parser(name)
         command.add_argument("path", type=Path)
         command.add_argument("--snapshot", type=Path)
+    sandbox = commands.add_parser("sandbox")
+    sandbox_commands = sandbox.add_subparsers(dest="sandbox_command", required=True)
+    for name in ("prepare", "verify"):
+        command = sandbox_commands.add_parser(name)
+        backend = command.add_subparsers(dest="sandbox_backend", required=True)
+        postgres = backend.add_parser("postgres")
+        postgres.add_argument("snapshot", type=Path)
+        postgres.add_argument("candidate_universe", type=Path)
+        postgres.add_argument("native_repository", type=Path)
+        postgres.add_argument(
+            "--dsn", default=os.environ.get("EXTSTATS_ADVISOR_PATCHED_POSTGRES_DSN")
+        )
+    destroy = sandbox_commands.add_parser("destroy")
+    destroy_backend = destroy.add_subparsers(dest="sandbox_backend", required=True)
+    destroy_postgres = destroy_backend.add_parser("postgres")
+    destroy_postgres.add_argument(
+        "--dsn", default=os.environ.get("EXTSTATS_ADVISOR_PATCHED_POSTGRES_DSN")
+    )
+    planner = commands.add_parser("planner")
+    planner_commands = planner.add_subparsers(dest="planner_command", required=True)
+    estimate = planner_commands.add_parser("estimate")
+    estimate_backend = estimate.add_subparsers(dest="planner_backend", required=True)
+    estimate_postgres = estimate_backend.add_parser("postgres")
+    estimate_postgres.add_argument("snapshot", type=Path)
+    estimate_postgres.add_argument("candidate_universe", type=Path)
+    estimate_postgres.add_argument("native_repository", type=Path)
+    estimate_postgres.add_argument(
+        "--dsn", default=os.environ.get("EXTSTATS_ADVISOR_PATCHED_POSTGRES_DSN")
+    )
+    estimate_postgres.add_argument("--query-id", required=True)
+    estimate_postgres.add_argument("--candidate", action="append", default=[])
     return parser
 
 
@@ -116,6 +156,65 @@ def main(argv: list[str] | None = None) -> int:
                 )
             else:
                 print(json.dumps(summary, sort_keys=True, indent=2))
+            return 0
+        if args.command == "sandbox":
+            if not args.dsn:
+                raise ExtStatsAdvisorError(
+                    "patched PostgreSQL DSN is required via --dsn or "
+                    "EXTSTATS_ADVISOR_PATCHED_POSTGRES_DSN"
+                )
+            if args.sandbox_command == "destroy":
+                print(json.dumps(destroy_postgres_planner_sandbox(args.dsn), sort_keys=True))
+                return 0
+            snapshot = load_snapshot(args.snapshot)
+            universe = load_candidate_universe(args.candidate_universe, snapshot)
+            repository = load_native_stats_repository(args.native_repository)
+            if args.sandbox_command == "prepare":
+                prepared = prepare_postgres_planner_sandbox(
+                    args.dsn, snapshot, universe, repository
+                )
+                print(
+                    json.dumps(
+                        {"status": "prepared", **prepared.metadata.to_dict()},
+                        sort_keys=True,
+                    )
+                )
+            else:
+                print(
+                    json.dumps(
+                        {
+                            "status": "valid",
+                            **verify_postgres_planner_sandbox(
+                                args.dsn, snapshot, universe, repository
+                            ),
+                        },
+                        sort_keys=True,
+                    )
+                )
+            return 0
+        if args.command == "planner":
+            if not args.dsn:
+                raise ExtStatsAdvisorError(
+                    "patched PostgreSQL DSN is required via --dsn or "
+                    "EXTSTATS_ADVISOR_PATCHED_POSTGRES_DSN"
+                )
+            snapshot = load_snapshot(args.snapshot)
+            universe = load_candidate_universe(args.candidate_universe, snapshot)
+            repository = load_native_stats_repository(args.native_repository)
+            with PostgresPlannerSession(args.dsn, snapshot, universe, repository) as session:
+                configuration = PostgresStatisticsConfiguration(tuple(args.candidate))
+                session.activate(configuration)
+                result = session.estimate_query(args.query_id)
+            print(
+                json.dumps(
+                    {
+                        "query_id": result.query_id,
+                        "ordered_candidate_ids": list(configuration.ordered_candidate_ids),
+                        "estimated_rows": result.estimated_rows,
+                    },
+                    sort_keys=True,
+                )
+            )
             return 0
         summary = validate_snapshot(args.path)
     except (ExtStatsAdvisorError, OSError) as exc:

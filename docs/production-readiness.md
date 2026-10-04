@@ -8,7 +8,8 @@ following gates remain open:
 - [x] production-safe bounded `SYSTEM` sampling with a candidate budget;
 - [ ] credential handling;
 - [ ] artifact encryption-at-rest story;
-- [ ] planner sandbox isolation;
+- [x] sample-only PostgreSQL planner sandbox isolation with backend-local
+  catalogless native-statistics activation;
 - [ ] failure recovery;
 - [x] acquisition timeouts and bounded sampling resource limit;
 - [x] offline workload-derived candidate universe v1;

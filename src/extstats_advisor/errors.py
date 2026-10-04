@@ -27,3 +27,15 @@ class NativeStatsMaterializationError(ExtStatsAdvisorError):
 
 class NativeStatsRepositoryValidationError(NativeStatsMaterializationError):
     """Raised when a native-statistics repository is malformed or inconsistent."""
+
+
+class PlannerSandboxError(ExtStatsAdvisorError):
+    """Raised when a PostgreSQL planner sandbox cannot be used safely."""
+
+
+class PlannerSandboxValidationError(PlannerSandboxError):
+    """Raised when live sandbox identity or frozen statistics have drifted."""
+
+
+class PlannerQueryError(PlannerSandboxError):
+    """Raised when a workload query is outside the planner sandbox v1 scope."""

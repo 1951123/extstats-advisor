@@ -162,6 +162,52 @@ class NativeStatsRepository:
     def candidates(self) -> tuple[Mapping[str, Any], ...]:
         return tuple(self.manifest["candidates"])
 
+    @property
+    def candidate_models(self) -> tuple[NativeStatsCandidate, ...]:
+        return tuple(
+            NativeStatsCandidate(
+                item["candidate_id"],
+                item["relation_id"],
+                item["kind"],
+                tuple(item["column_ordinals"]),
+                tuple(item["column_names"]),
+                item["state"],
+                item.get("serialization"),
+                item["payload_size"],
+                item.get("payload_sha256"),
+                item.get("payload_path"),
+            )
+            for item in self.manifest["candidates"]
+        )
+
+    @property
+    def source_snapshot_semantic_digest(self) -> str:
+        return str(self.manifest["source_snapshot_semantic_digest"])
+
+    @property
+    def candidate_universe_semantic_digest(self) -> str:
+        return str(self.manifest["candidate_universe_semantic_digest"])
+
+    @property
+    def backend_contract(self) -> str:
+        return str(self.manifest["backend"]["contract"])
+
+    @property
+    def server_version(self) -> str:
+        return str(self.manifest["backend"]["server_version"])
+
+    @property
+    def server_version_num(self) -> int:
+        return int(self.manifest["backend"]["server_version_num"])
+
+    @property
+    def statistics_target(self) -> int:
+        return int(self.manifest["statistics_target"])
+
+    @property
+    def ordinary_stats_fingerprint(self) -> str:
+        return str(self.manifest["ordinary_stats"]["fingerprint"])
+
 
 # Public name used by the production-facing PostgreSQL backend API.
 PostgreSQLNativeStatsRepository = NativeStatsRepository

@@ -15,8 +15,12 @@ from extstats_advisor.errors import NativeStatsMaterializationError
 from extstats_advisor.snapshot.model import RelationSchema
 
 
+def relation_identifier(schema_name: str, relation_name: str, sql: Any) -> Any:
+    return sql.SQL("{}.{}").format(sql.Identifier(schema_name), sql.Identifier(relation_name))
+
+
 def scratch_relation_sql(name: str, sql: Any) -> Any:
-    return sql.SQL("{}.{}").format(sql.Identifier("pg_temp"), sql.Identifier(name))
+    return relation_identifier("pg_temp", name, sql)
 
 
 def _resolve_collation(connection: Any, collation: str) -> tuple[str, str]:
@@ -34,11 +38,14 @@ def _resolve_collation(connection: Any, collation: str) -> tuple[str, str]:
     return str(row[0]), str(row[1])
 
 
-def create_scratch_relation(
+def create_relation(
     connection: Any,
     name: str,
     schema: RelationSchema,
     sql: Any,
+    *,
+    schema_name: str | None = None,
+    temporary: bool = False,
 ) -> None:
     columns = []
     for column in schema.columns:
@@ -64,10 +71,29 @@ def create_scratch_relation(
                 sql.Identifier(column.name), sql.SQL(native_type), collation, nullability
             )
         )
-    statement = sql.SQL("CREATE TEMPORARY TABLE {} ({}) ON COMMIT DROP").format(
-        sql.Identifier(name), sql.SQL(", ").join(columns)
+    if temporary:
+        table_name = sql.Identifier(name)
+        prefix = sql.SQL("CREATE TEMPORARY TABLE")
+        suffix = sql.SQL(" ON COMMIT DROP")
+    else:
+        if schema_name is None:
+            raise ValueError("persistent relation creation requires schema_name")
+        table_name = relation_identifier(schema_name, name, sql)
+        prefix = sql.SQL("CREATE TABLE")
+        suffix = sql.SQL("")
+    statement = sql.SQL("{} {} ({}){}").format(
+        prefix, table_name, sql.SQL(", ").join(columns), suffix
     )
     connection.execute(statement)
+
+
+def create_scratch_relation(
+    connection: Any,
+    name: str,
+    schema: RelationSchema,
+    sql: Any,
+) -> None:
+    create_relation(connection, name, schema, sql, temporary=True)
 
 
 def copy_arrow_table(
@@ -79,8 +105,27 @@ def copy_arrow_table(
     *,
     batch_size: int,
 ) -> None:
+    copy_arrow_table_to_relation(
+        connection,
+        scratch_relation_sql(name, sql),
+        schema,
+        table,
+        sql,
+        batch_size=batch_size,
+    )
+
+
+def copy_arrow_table_to_relation(
+    connection: Any,
+    relation: Any,
+    schema: RelationSchema,
+    table: pa.Table,
+    sql: Any,
+    *,
+    batch_size: int,
+) -> None:
     columns = sql.SQL(", ").join(sql.Identifier(column.name) for column in schema.columns)
-    statement = sql.SQL("COPY {} ({}) FROM STDIN").format(scratch_relation_sql(name, sql), columns)
+    statement = sql.SQL("COPY {} ({}) FROM STDIN").format(relation, columns)
     try:
         with connection.cursor().copy(statement) as copy:
             for batch in table.to_batches(max_chunksize=batch_size):
@@ -88,4 +133,4 @@ def copy_arrow_table(
                 for row in zip(*(array.to_pylist() for array in arrays), strict=True):
                     copy.write_row(row)
     except Exception as exc:
-        raise NativeStatsMaterializationError(f"could not stage Arrow sample into {name}") from exc
+        raise NativeStatsMaterializationError("could not stage Arrow sample into relation") from exc

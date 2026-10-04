@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import math
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 
-from extstats_advisor.candidates.universe import CandidateUniverse
 from extstats_advisor.canonical import digest_bytes
 from extstats_advisor.dbms.postgres.ordinary_stats import ordinary_stats_fingerprint
 from extstats_advisor.dbms.postgres.patch import PatchCapabilities, probe_patched_postgres
@@ -26,6 +25,9 @@ from extstats_advisor.native_stats.model import (
     NativeStatsMaterialization,
 )
 from extstats_advisor.snapshot.model import AdvisorSnapshot, RelationSchema
+
+if TYPE_CHECKING:
+    from extstats_advisor.candidates.universe import CandidateUniverse
 
 MCV_SERIALIZATION = "postgresql.pg_mcv_list_send-v1"
 DEPENDENCIES_SERIALIZATION = "postgresql.pg_dependencies_send-v1"

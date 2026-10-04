@@ -30,9 +30,9 @@ Relevant attribute groups (core)
     | PostgreSQL capability expansion
     v
 CandidateUniverse v1
-    | future native materialization / planner sandbox
+    | native sample-only materialization / planner sandbox
     v
-Planner sandbox and later advisor stages
+Native cardinality-estimation planner sandbox and later advisor stages
 ```
 
 The implementation includes the sealed snapshot contract, typed Arrow sample
@@ -40,11 +40,14 @@ serialization, validation, inspection, and a first PostgreSQL source
 acquisition backend. That backend is deliberately limited to one read-only
 ordinary base table: schema extraction, `pg_class.reltuples` population
 metadata, and bounded typed sampling. Sample replay, native statistics
-construction, hypothetical configuration activation, native planner estimates,
-and planner execution are not implemented here. Candidate generation is an
-offline derived artifact: the PostgreSQL adapter parses its SQL dialect into
-portable predicate profiles, core derives relevant column pairs, and the
-PostgreSQL capability advertises native kinds without constructing payloads.
+materialization, and the PostgreSQL planner sandbox are separate downstream
+stages. The sandbox reconstructs ordinary statistics from the sealed sample and
+exposes backend-local catalogless native-statistics registration, ordered
+activation, and native cardinality estimates. It does not claim production
+physical-plan fidelity. Candidate generation is an offline derived artifact:
+the PostgreSQL adapter parses its SQL dialect into portable predicate profiles,
+core derives relevant column pairs, and the PostgreSQL capability advertises
+native kinds without constructing payloads.
 
 Generation, static precedence, ranking, and screening are separate stages.
 The static PostgreSQL precedence in `CandidateUniverse v1` is deterministic

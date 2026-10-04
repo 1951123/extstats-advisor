@@ -198,6 +198,56 @@ def validate_native_stats_repository(path: Path) -> dict[str, Any]:
     }
 
 
+def validate_native_stats_repository_compatibility(
+    repository: NativeStatsRepository,
+    snapshot: Any,
+    candidate_universe: Any,
+) -> dict[str, Any]:
+    """Validate the repository identity and exact candidate inventory for consumers."""
+
+    snapshot_digest = getattr(snapshot, "semantic_digest", None)
+    if repository.source_snapshot_semantic_digest != snapshot_digest:
+        raise NativeStatsRepositoryValidationError("native repository snapshot digest mismatch")
+    if repository.candidate_universe_semantic_digest != candidate_universe.semantic_digest:
+        raise NativeStatsRepositoryValidationError(
+            "native repository candidate-universe digest mismatch"
+        )
+    expected = tuple(
+        (
+            candidate.candidate_id,
+            candidate.relation_id,
+            candidate.kind,
+            candidate.column_ordinals,
+            candidate.column_names,
+        )
+        for candidate in candidate_universe.candidates
+    )
+    actual = tuple(
+        (
+            candidate.candidate_id,
+            candidate.relation_id,
+            candidate.kind,
+            candidate.column_ordinals,
+            candidate.column_names,
+        )
+        for candidate in repository.candidate_models
+    )
+    if actual != expected:
+        raise NativeStatsRepositoryValidationError(
+            "native repository candidate inventory does not match CandidateUniverse"
+        )
+    return {
+        "semantic_digest": repository.semantic_digest,
+        "candidate_count": len(actual),
+        "present_count": sum(
+            candidate.state == "present" for candidate in repository.candidate_models
+        ),
+        "absent_count": sum(
+            candidate.state == "absent-native" for candidate in repository.candidate_models
+        ),
+    }
+
+
 def load_native_stats_repository(path: Path) -> NativeStatsRepository:
     root = Path(path).expanduser().resolve()
     validate_native_stats_repository(root)
