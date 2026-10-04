@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Self
 from extstats_advisor.dbms.postgres.native_stats import _psycopg
 from extstats_advisor.dbms.postgres.patch import probe_patched_postgres
 from extstats_advisor.dbms.postgres.sandbox import (
-    verify_postgres_planner_sandbox,
+    _verify_postgres_planner_sandbox_connection,
 )
 from extstats_advisor.errors import PlannerQueryError, PlannerSandboxError
 from extstats_advisor.native_stats.model import ABSENT_NATIVE, NativeStatsRepository
@@ -166,19 +166,21 @@ class PostgresPlannerSession:
                 autocommit=True,
             )
             capabilities = probe_patched_postgres(connection)
-            verification = verify_postgres_planner_sandbox(
-                self._dsn,
-                self._snapshot,
-                self._universe,
-                self._repository,
-            )
-            self._target_oid = int(verification["target_relation_oid"])
             connection.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
             sql = psycopg.sql
             relation = _target_relation_name(self._snapshot)
             connection.execute(
                 sql.SQL("SET LOCAL search_path TO {}").format(sql.Identifier(relation.schema))
             )
+            _, target_oid, _, _ = _verify_postgres_planner_sandbox_connection(
+                connection,
+                self._snapshot,
+                self._universe,
+                self._repository,
+                capabilities,
+                sql,
+            )
+            self._target_oid = target_oid
             connection.execute("SELECT pg_catalog.pg_hypothetical_extstats_reset()")
             self._connection = connection
             self._register_repository()

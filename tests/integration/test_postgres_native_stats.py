@@ -244,12 +244,21 @@ def test_patched_planner_sandbox_is_catalogless_ordered_and_isolated(
             assert session_b.active_backend_oids() == (
                 session_b.registered_oids[second_present.candidate_id],
             )
+        with psycopg.connect(patched_postgres_dsn, autocommit=True) as connection:
+            connection.execute("INSERT INTO \"public\".\"Scratch Table\" VALUES (9, 'z', 'z')")
+        assert (
+            session_a.connection.execute(
+                'SELECT count(*) FROM "public"."Scratch Table"'
+            ).fetchone()[0]
+            == 24
+        )
+        session_a.activate(PostgresStatisticsConfiguration((mcv.candidate_id,)))
+        post_commit_estimate = session_a.estimate_query("q1")
+        assert post_commit_estimate.estimated_rows == mcv_estimate.estimated_rows
         session_a.activate(PostgresStatisticsConfiguration((absent.candidate_id,)))
         absent_estimate = session_a.estimate_query("q1")
         assert absent_estimate.estimated_rows == baseline.estimated_rows
 
-    with psycopg.connect(patched_postgres_dsn, autocommit=True) as connection:
-        connection.execute("INSERT INTO \"public\".\"Scratch Table\" VALUES (9, 'z', 'z')")
     with pytest.raises(PlannerSandboxValidationError, match="sample row count drift"):
         verify_postgres_planner_sandbox(patched_postgres_dsn, snapshot, universe, repository)
 

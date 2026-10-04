@@ -392,14 +392,18 @@ def _reloptions_disabled(options: Any) -> bool:
     return options is not None and "autovacuum_enabled=false" in set(options)
 
 
-def _verify_live(
+def _verify_postgres_planner_sandbox_connection(
     connection: Any,
     snapshot: AdvisorSnapshot,
     universe: CandidateUniverse,
     repository: NativeStatsRepository,
     capabilities: PatchCapabilities,
     sql: Any,
-) -> tuple[PostgresSandboxMetadata, int, dict[str, Any]]:
+) -> tuple[PostgresSandboxMetadata, int, dict[str, Any], dict[str, Any]]:
+    catalog = snapshot.schemas[0].relation_name.catalog
+    database = str(connection.execute("SELECT current_database()").fetchone()[0])
+    if catalog is None or database != catalog:
+        raise PlannerSandboxValidationError("sandbox database does not match snapshot catalog")
     compatibility = validate_native_stats_repository_compatibility(repository, snapshot, universe)
     schema = snapshot.schemas[0]
     _require_sandbox_schema(schema)
@@ -488,6 +492,7 @@ def _verify_live(
             "physical_extstats_count": extstats_count,
             "autovacuum_disabled": True,
         },
+        compatibility,
     )
 
 
@@ -699,21 +704,15 @@ def verify_postgres_planner_sandbox(
 ) -> dict[str, Any]:
     if len(snapshot.schemas) != 1 or len(snapshot.populations) != 1:
         raise PlannerSandboxValidationError("planner sandbox v1 requires one relation")
-    compatibility = validate_native_stats_repository_compatibility(
-        native_repository, snapshot, candidate_universe
-    )
     psycopg = _psycopg()
     connection = None
     try:
         connection = psycopg.connect(
             dsn, application_name="extstats-advisor-sandbox-verify", autocommit=True
         )
+        connection.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
         capabilities = probe_patched_postgres(connection)
-        database = str(connection.execute("SELECT current_database()").fetchone()[0])
-        catalog = snapshot.schemas[0].relation_name.catalog
-        if catalog is None or database != catalog:
-            raise PlannerSandboxValidationError("sandbox database does not match snapshot catalog")
-        metadata, target_oid, checks = _verify_live(
+        metadata, target_oid, checks, compatibility = _verify_postgres_planner_sandbox_connection(
             connection,
             snapshot,
             candidate_universe,
@@ -734,7 +733,10 @@ def verify_postgres_planner_sandbox(
         raise PlannerSandboxValidationError("could not verify PostgreSQL planner sandbox") from exc
     finally:
         if connection is not None:
-            connection.close()
+            try:
+                connection.rollback()
+            finally:
+                connection.close()
 
 
 def destroy_postgres_planner_sandbox(dsn: str) -> dict[str, Any]:
