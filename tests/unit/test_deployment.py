@@ -270,6 +270,97 @@ class _CatalogConnection:
         return _Rows([("1",)])
 
 
+class _LiveColumnConnection:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def execute(self, query, params):
+        assert "format_type(a.atttypid, a.atttypmod)" in query
+        assert "attcollation" in query
+        return _Rows(self.rows)
+
+
+def _column_identity_snapshot(native_type: str, native_collation: str | None = None):
+    sources = _source_chain()
+    relation = sources[0].schemas[0]
+    columns = list(relation.columns)
+    columns[0] = replace(columns[0], native_type=native_type, native_collation=native_collation)
+    values = dict(sources[0].__dict__)
+    values["schemas"] = (replace(relation, columns=tuple(columns)),)
+    return SimpleNamespace(**values)
+
+
+def test_live_columns_preserve_format_type_and_collation_representation() -> None:
+    observed = deployment_module._live_columns(
+        _LiveColumnConnection(
+            [(1, "Customer ID", "character varying(64)", False, '"pg_catalog"."default"')]
+        ),
+        42,
+    )
+    assert observed[1] == {
+        "name": "Customer ID",
+        "native_type": "character varying(64)",
+        "dropped": False,
+        "native_collation": '"pg_catalog"."default"',
+    }
+
+
+@pytest.mark.parametrize(
+    ("snapshot_type", "live_type"),
+    (
+        ("character varying(64)", "character varying(64)"),
+        ("character varying(64)", "character varying(32)"),
+        ("numeric(10,2)", "numeric(12,2)"),
+        ("bigint", "integer"),
+    ),
+)
+def test_selected_column_native_type_identity_is_typmod_aware(snapshot_type, live_type) -> None:
+    sources = _source_chain()
+    snapshot = _column_identity_snapshot(snapshot_type)
+    relation = snapshot.schemas[0]
+    live = {
+        1: {
+            "name": "Customer ID",
+            "native_type": live_type,
+            "native_collation": None,
+            "dropped": False,
+        },
+        2: {
+            "name": relation.columns[1].name,
+            "native_type": relation.columns[1].native_type,
+            "native_collation": relation.columns[1].native_collation,
+            "dropped": False,
+        },
+    }
+    if snapshot_type == live_type:
+        deployment_module._validate_selected_columns(snapshot, sources[-1], relation, live)
+    else:
+        with pytest.raises(DeploymentValidationError, match="selected column type drift"):
+            deployment_module._validate_selected_columns(snapshot, sources[-1], relation, live)
+
+
+def test_selected_column_collation_identity_is_fail_closed() -> None:
+    sources = _source_chain()
+    snapshot = _column_identity_snapshot("bigint", '"pg_catalog"."default"')
+    relation = snapshot.schemas[0]
+    live = {
+        1: {
+            "name": "Customer ID",
+            "native_type": "bigint",
+            "native_collation": '"pg_catalog"."C"',
+            "dropped": False,
+        },
+        2: {
+            "name": relation.columns[1].name,
+            "native_type": relation.columns[1].native_type,
+            "native_collation": relation.columns[1].native_collation,
+            "dropped": False,
+        },
+    }
+    with pytest.raises(DeploymentValidationError, match="selected column collation drift"):
+        deployment_module._validate_selected_columns(snapshot, sources[-1], relation, live)
+
+
 def test_managed_verification_allows_external_oid_interleaving() -> None:
     sources = _source_chain()
     recommendation = sources[-1]

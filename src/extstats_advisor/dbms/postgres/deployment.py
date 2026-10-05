@@ -198,8 +198,13 @@ def _load_live_relation(connection: Any, recommendation: Recommendation) -> dict
 
 def _live_columns(connection: Any, relation_oid: int) -> dict[int, dict[str, Any]]:
     rows = connection.execute(
-        "SELECT a.attnum, a.attname, a.atttypid::regtype::text, a.attisdropped "
+        "SELECT a.attnum, a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), "
+        "a.attisdropped, "
+        "CASE WHEN a.attcollation = 0 THEN NULL "
+        "     ELSE quote_ident(cn.nspname) || '.' || quote_ident(co.collname) END "
         "FROM pg_catalog.pg_attribute AS a "
+        "LEFT JOIN pg_catalog.pg_collation AS co ON co.oid = a.attcollation "
+        "LEFT JOIN pg_catalog.pg_namespace AS cn ON cn.oid = co.collnamespace "
         "WHERE a.attrelid = %s AND a.attnum > 0 ORDER BY a.attnum",
         (relation_oid,),
     ).fetchall()
@@ -208,6 +213,7 @@ def _live_columns(connection: Any, relation_oid: int) -> dict[int, dict[str, Any
             "name": str(row[1]),
             "native_type": str(row[2]),
             "dropped": bool(row[3]),
+            "native_collation": row[4] if row[4] is None else str(row[4]),
         }
         for row in rows
     }
@@ -232,6 +238,8 @@ def _validate_selected_columns(
                 raise DeploymentValidationError(f"selected column name drift: {name}")
             if expected.native_type is None or observed["native_type"] != expected.native_type:
                 raise DeploymentValidationError(f"selected column type drift: {name}")
+            if observed["native_collation"] != expected.native_collation:
+                raise DeploymentValidationError(f"selected column collation drift: {name}")
 
 
 def _existing_external_statistics(connection: Any, relation_oid: int) -> list[dict[str, Any]]:

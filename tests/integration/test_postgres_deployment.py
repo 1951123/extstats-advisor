@@ -114,8 +114,8 @@ def _source_seeds(profile):
             candidate_id=candidate_id,
             relation_id="rel",
             kind=kind,
-            column_ordinals=(1, 2),
-            column_names=("Customer ID", "Small Value"),
+            column_ordinals=(1, 8),
+            column_names=("Customer ID", "Code"),
         )
         for candidate_id, kind in (
             ("A", "postgresql.mcv"),
@@ -247,6 +247,9 @@ def test_stock_postgres_deployment_is_transactional_and_add_only(
 
     source_args, recommendation = _live_deployment_context(postgres_capture_dsn, postgres_admin_dsn)
 
+    selected_column = source_args[0].schemas[0].columns[7]
+    assert selected_column.native_type == "character varying(64)"
+
     result = deploy_postgres_recommendation(
         postgres_admin_dsn,
         *source_args,
@@ -278,6 +281,50 @@ def test_stock_postgres_deployment_is_transactional_and_add_only(
     names = {str(row[0]) for row in rows}
     assert "external_before" in names
     assert {item.name for item in result.deployed_objects} <= names
+
+
+def test_stock_postgres_typmod_drift_fails_closed_without_mutation(
+    postgres_capture_dsn: str, postgres_admin_dsn: str
+) -> None:
+    import psycopg
+
+    _clean_deployment_objects(postgres_admin_dsn)
+    source_args, recommendation = _live_deployment_context(postgres_capture_dsn, postgres_admin_dsn)
+    with psycopg.connect(postgres_admin_dsn, autocommit=True) as connection:
+        connection.execute(
+            'ALTER TABLE "Reporting.Schema"."Order Facts" ALTER COLUMN "Code" TYPE varchar(32)'
+        )
+        before = connection.execute(
+            "SELECT count(*) FROM pg_catalog.pg_statistic_ext AS e "
+            "JOIN pg_catalog.pg_namespace AS n ON n.oid = e.stxnamespace "
+            "WHERE n.nspname = %s",
+            ("Reporting.Schema",),
+        ).fetchone()[0]
+        before_analyze = connection.execute(
+            "SELECT last_analyze FROM pg_catalog.pg_stat_all_tables "
+            "WHERE schemaname = %s AND relname = %s",
+            ("Reporting.Schema", "Order Facts"),
+        ).fetchone()[0]
+
+    with pytest.raises(DeploymentValidationError, match="selected column type drift: Code"):
+        deploy_postgres_recommendation(postgres_admin_dsn, *source_args, recommendation)
+
+    with psycopg.connect(postgres_admin_dsn, autocommit=True) as connection:
+        after = connection.execute(
+            "SELECT count(*) FROM pg_catalog.pg_statistic_ext AS e "
+            "JOIN pg_catalog.pg_namespace AS n ON n.oid = e.stxnamespace "
+            "WHERE n.nspname = %s",
+            ("Reporting.Schema",),
+        ).fetchone()[0]
+        after_analyze = connection.execute(
+            "SELECT last_analyze FROM pg_catalog.pg_stat_all_tables "
+            "WHERE schemaname = %s AND relname = %s",
+            ("Reporting.Schema", "Order Facts"),
+        ).fetchone()[0]
+    assert before == after == 0
+    assert before_analyze == after_analyze
+    with psycopg.connect(postgres_admin_dsn, autocommit=True) as connection:
+        connection.execute('ANALYZE "Reporting.Schema"."Order Facts"')
 
 
 def test_stock_postgres_deterministic_name_collision_fails_closed(

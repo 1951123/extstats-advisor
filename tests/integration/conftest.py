@@ -48,7 +48,7 @@ def postgres_capture_dsn() -> str:
                 "Double Value" double precision,
                 "Amount" numeric(10,2),
                 "Description" text,
-                "Code" varchar(20),
+                "Code" varchar(64),
                 "Flag" boolean,
                 "Payload" bytea,
                 "Order Date" date,
