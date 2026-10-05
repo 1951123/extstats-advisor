@@ -12,7 +12,9 @@ from typing import Any
 from extstats_advisor.canonical import canonical_json, digest_json
 from extstats_advisor.errors import GroundTruthValidationError
 from extstats_advisor.ground_truth.model import (
+    AUTHORITATIVE_EXTERNAL_SOURCE,
     GROUND_TRUTH_FORMAT_VERSION,
+    PRODUCTION_EXACT_SOURCE,
     CardinalityTruth,
     GroundTruthSet,
     GroundTruthSource,
@@ -80,13 +82,26 @@ def _ground_truth_from_manifest(value: dict[str, Any]) -> GroundTruthSet:
         raise GroundTruthValidationError("unknown ground-truth format version")
     if not isinstance(value.get("source"), dict):
         raise GroundTruthValidationError("ground-truth source must be an object")
-    if set(value["source"]) != {
-        "kind",
-        "dbms",
-        "server_version",
-        "server_version_num",
-        "source_view_token",
-    }:
+    source_kind = value["source"].get("kind")
+    if not isinstance(source_kind, str):
+        source_kind = None
+    source_fields = {
+        PRODUCTION_EXACT_SOURCE: {
+            "kind",
+            "dbms",
+            "server_version",
+            "server_version_num",
+            "source_view_token",
+        },
+        AUTHORITATIVE_EXTERNAL_SOURCE: {
+            "kind",
+            "authority",
+            "dataset_identity",
+            "source_revision",
+            "source_artifact_sha256",
+        },
+    }.get(source_kind)
+    if source_fields is None or set(value["source"]) != source_fields:
         raise GroundTruthValidationError("ground-truth source fields are invalid")
     if not isinstance(value.get("runtime_metadata"), dict):
         raise GroundTruthValidationError("ground-truth runtime_metadata must be an object")
@@ -120,11 +135,12 @@ def _check_snapshot_compatibility(ground_truth: GroundTruthSet, snapshot: Adviso
         raise GroundTruthValidationError("ground-truth snapshot digest mismatch")
     if ground_truth.workload_id != snapshot.workload.workload_id:
         raise GroundTruthValidationError("ground-truth workload ID mismatch")
-    if ground_truth.source.dbms != snapshot.dbms.name:
-        raise GroundTruthValidationError("ground-truth DBMS mismatch")
-    token = snapshot.semantic_provenance.get("source_view_token")
-    if not isinstance(token, str) or token != ground_truth.source.source_view_token:
-        raise GroundTruthValidationError("ground-truth source-view provenance mismatch")
+    if ground_truth.source.kind == PRODUCTION_EXACT_SOURCE:
+        if ground_truth.source.dbms != snapshot.dbms.name:
+            raise GroundTruthValidationError("ground-truth DBMS mismatch")
+        token = snapshot.semantic_provenance.get("source_view_token")
+        if not isinstance(token, str) or token != ground_truth.source.source_view_token:
+            raise GroundTruthValidationError("ground-truth source-view provenance mismatch")
     query_ids = {query.query_id for query in snapshot.workload.queries}
     truth_ids = {truth.query_id for truth in ground_truth.truths}
     if not truth_ids.issubset(query_ids):
@@ -146,14 +162,40 @@ def validate_ground_truth_set(
     result = _ground_truth_from_manifest(_read_json(root.resolve()))
     if snapshot is not None:
         _check_snapshot_compatibility(result, snapshot)
-    return {
+    summary = {
         "format_version": GROUND_TRUTH_FORMAT_VERSION,
         "semantic_digest": result.computed_semantic_digest,
         "source_snapshot_semantic_digest": result.source_snapshot_semantic_digest,
         "workload_id": result.workload_id,
         "query_count": len(result.truths),
-        "source_view_token": result.source.source_view_token,
+        "source_kind": result.source.kind,
+        "collection_contract": result.collection_contract,
     }
+    if result.source.kind == PRODUCTION_EXACT_SOURCE:
+        summary.update(
+            {
+                "dbms": result.source.dbms,
+                "server_version": result.source.server_version,
+                "server_version_num": result.source.server_version_num,
+                "source_view_token": result.source.source_view_token,
+            }
+        )
+    else:
+        summary.update(
+            {
+                "authority": result.source.authority,
+                "dataset_identity": result.source.dataset_identity,
+                "source_revision": result.source.source_revision,
+                "source_artifact_sha256": result.source.source_artifact_sha256,
+            }
+        )
+    return summary
+
+
+def inspect_ground_truth(path: Path) -> dict[str, Any]:
+    """Return structural and provenance metadata without exposing truth rows."""
+
+    return validate_ground_truth_set(path)
 
 
 def load_ground_truth_set(path: Path, snapshot: AdvisorSnapshot | None = None) -> GroundTruthSet:

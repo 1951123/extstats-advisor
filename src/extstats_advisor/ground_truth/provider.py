@@ -28,3 +28,7 @@ class ArtifactGroundTruthProvider:
 
 class ProductionExactCardinalityProvider(ArtifactGroundTruthProvider):
     """The v1 production reference provider, currently artifact-backed."""
+
+
+class AuthoritativeExternalGroundTruthProvider(ArtifactGroundTruthProvider):
+    """Artifact-backed provider for immutable externally established exact truth."""

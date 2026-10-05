@@ -61,6 +61,69 @@ executes no workload truth queries.
 sample-derived, or external telemetry providers can replace it without
 changing utility evaluation.
 
+## Authoritative external exact truth
+
+`GroundTruthSet` cardinalities are optimization/evaluation truth. Its
+`GroundTruthSource` records how those cardinalities were obtained; provenance
+is not a second estimator or a different utility path.
+
+The `authoritative-external-exact` source kind is for immutable exact counts
+established outside the advisor. It deliberately has no DBMS, server-version,
+or PostgreSQL source-view token: the advisor does not pretend that it executed
+those labels. The source records `authority`, `dataset_identity`,
+`source_revision`, and the SHA-256 of the imported observations bytes. Artifact
+integrity and explicit binding to the selected snapshot/workload are checked;
+the advisor does not cryptographically prove that external labels describe the
+current database contents.
+
+The DBMS-neutral input contract is
+`authoritative-cardinality-observations-v1`:
+
+```json
+{
+  "format_version": "authoritative-cardinality-observations-v1",
+  "workload_id": "workload-v1",
+  "truths": [
+    {"query_id": "q1", "cardinality": 42}
+  ]
+}
+```
+
+It contains no SQL, DSN, credentials, planner estimate, q-error, learned
+output, or optimizer configuration. The importer requires a sealed
+`AdvisorSnapshot`, rejects unknown/duplicate queries and invalid cardinalities,
+requires every positive-weight query, and computes the source-file SHA-256
+itself. A zero-weight query may remain absent.
+
+Import and inspect an external truth artifact without a PostgreSQL connection:
+
+```bash
+extstats-advisor ground-truth import authoritative \
+  snapshot-dir observations.json \
+  --authority warehouse-counts \
+  --dataset-identity orders-2026-01 \
+  --source-revision immutable-17 \
+  --output ground-truth-external.json
+
+extstats-advisor ground-truth validate ground-truth-external.json \
+  --snapshot snapshot-dir
+extstats-advisor ground-truth inspect ground-truth-external.json
+```
+
+External and `production-exact-execution` GroundTruthSets use the same
+`ArtifactGroundTruthProvider`, loss, utility, profiling, search, and
+recommendation interfaces. For production exact truth, source DBMS and
+`source_view_token` must match the snapshot's DBMS and semantic provenance.
+For external truth, the snapshot semantic digest, workload ID, and exact query
+coverage are the binding; no invented PostgreSQL token is required.
+
+The optimizer evaluated advisor membership `M*`, not necessarily the combined
+state `E_existing union M*` when externally managed statistics coexist.
+Therefore a search objective is not presented as guaranteed for that combined
+production state. The DBA decides whether existing statistics remain, are
+removed, replaced, or coexist. This external truth extension does not change
+optimization, utility, search, recommendation, or deployment semantics.
+
 ## Loss and utility
 
 `CardinalityLoss` accepts numeric planner estimates and integer truth. The v1

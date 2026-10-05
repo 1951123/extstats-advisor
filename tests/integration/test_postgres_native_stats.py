@@ -7,6 +7,7 @@ import pyarrow as pa
 import pytest
 
 from extstats_advisor.candidates.universe import derive_candidate_universe
+from extstats_advisor.canonical import canonical_json
 from extstats_advisor.dbms.postgres.native_stats import materialize_native_stats
 from extstats_advisor.dbms.postgres.planner import (
     PostgresPlannerSession,
@@ -25,11 +26,9 @@ from extstats_advisor.dbms.postgres.sandbox import (
 from extstats_advisor.dbms.postgres.search import search_postgres_greedy_add
 from extstats_advisor.errors import PlannerSandboxValidationError
 from extstats_advisor.ground_truth import (
-    PRODUCTION_EXACT_SOURCE,
+    AUTHORITATIVE_CARDINALITY_OBSERVATIONS_FORMAT_VERSION,
     ArtifactGroundTruthProvider,
-    CardinalityTruth,
-    GroundTruthSet,
-    GroundTruthSource,
+    import_authoritative_ground_truth,
     load_ground_truth_set,
     write_ground_truth_set,
 )
@@ -239,19 +238,25 @@ def test_patched_planner_sandbox_is_catalogless_ordered_and_isolated(
     assert verification["physical_extstats_count"] == 0
     assert verification["autovacuum_disabled"] is True
 
-    truth_path = tmp_path / "ground-truth-v1.json"
-    truth = GroundTruthSet(
-        snapshot.semantic_digest,
-        snapshot.workload.workload_id,
-        GroundTruthSource(
-            PRODUCTION_EXACT_SOURCE,
-            "postgresql",
-            repository.server_version,
-            repository.server_version_num,
-            snapshot.semantic_provenance["source_view_token"],
-        ),
-        (CardinalityTruth("q1", 125, PRODUCTION_EXACT_SOURCE),),
+    observations_path = tmp_path / "authoritative-observations.json"
+    observations_path.write_bytes(
+        canonical_json(
+            {
+                "format_version": AUTHORITATIVE_CARDINALITY_OBSERVATIONS_FORMAT_VERSION,
+                "workload_id": snapshot.workload.workload_id,
+                "truths": [{"query_id": "q1", "cardinality": 125}],
+            }
+        )
+        + b"\n"
     )
+    truth = import_authoritative_ground_truth(
+        snapshot,
+        observations_path,
+        authority="patched-integration-fixture",
+        dataset_identity="scratch-table-fixed-sample",
+        source_revision="patched-fixture-v1",
+    )
+    truth_path = tmp_path / "ground-truth-external.json"
     write_ground_truth_set(truth, truth_path)
     loaded_truth = load_ground_truth_set(truth_path, snapshot)
     utility = WeightedWorkloadUtility(

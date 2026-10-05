@@ -41,7 +41,10 @@ from extstats_advisor.deployment.artifact import (
 from extstats_advisor.errors import ExtStatsAdvisorError
 from extstats_advisor.ground_truth import (
     ArtifactGroundTruthProvider,
+    import_authoritative_ground_truth,
+    inspect_ground_truth,
     load_ground_truth_set,
+    validate_ground_truth_set,
     write_ground_truth_set,
 )
 from extstats_advisor.native_stats.repository import load_native_stats_repository
@@ -96,6 +99,23 @@ def _parser() -> argparse.ArgumentParser:
     postgres.add_argument("--lock-timeout-ms", type=int, default=5_000)
     postgres.add_argument("--statement-timeout-ms", type=int, default=60_000)
     postgres.add_argument("--ground-truth-output", type=Path)
+    ground_truth = commands.add_parser("ground-truth", aliases=["ground_truth"])
+    ground_truth_commands = ground_truth.add_subparsers(dest="ground_truth_command", required=True)
+    import_authoritative = ground_truth_commands.add_parser("import")
+    import_authoritative_commands = import_authoritative.add_subparsers(
+        dest="ground_truth_import_kind", required=True
+    )
+    authoritative = import_authoritative_commands.add_parser("authoritative")
+    authoritative.add_argument("snapshot", type=Path)
+    authoritative.add_argument("observations", type=Path)
+    authoritative.add_argument("--authority", required=True)
+    authoritative.add_argument("--dataset-identity", required=True)
+    authoritative.add_argument("--source-revision", required=True)
+    authoritative.add_argument("--output", required=True, type=Path)
+    for name in ("validate", "inspect"):
+        command = ground_truth_commands.add_parser(name)
+        command.add_argument("path", type=Path)
+        command.add_argument("--snapshot", type=Path)
     candidates = commands.add_parser("candidates")
     candidate_commands = candidates.add_subparsers(dest="candidate_command", required=True)
     derive = candidate_commands.add_parser("derive")
@@ -339,6 +359,35 @@ def _load_deployment_sources(args: argparse.Namespace) -> tuple[object, ...]:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.command in {"ground-truth", "ground_truth"}:
+            if args.ground_truth_command == "import":
+                ground_truth = import_authoritative_ground_truth(
+                    args.snapshot,
+                    args.observations,
+                    authority=args.authority,
+                    dataset_identity=args.dataset_identity,
+                    source_revision=args.source_revision,
+                )
+                digest = write_ground_truth_set(ground_truth, args.output)
+                print(
+                    json.dumps(
+                        {
+                            "status": "imported",
+                            "output": str(args.output),
+                            **inspect_ground_truth(args.output),
+                            "semantic_digest": digest,
+                        },
+                        sort_keys=True,
+                    )
+                )
+                return 0
+            snapshot = load_snapshot(args.snapshot) if args.snapshot else None
+            summary = validate_ground_truth_set(args.path, snapshot)
+            if args.ground_truth_command == "validate":
+                print(json.dumps({"status": "valid", **summary}, sort_keys=True))
+            else:
+                print(json.dumps(summary, sort_keys=True, indent=2))
+            return 0
         if getattr(args, "snapshot_command", None) == "capture":
             if not args.dsn:
                 raise ExtStatsAdvisorError(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pyarrow as pa
 import pytest
@@ -141,3 +142,15 @@ def test_ground_truth_rejects_digest_corruption_duplicate_and_negative(tmp_path)
         )
     with pytest.raises(GroundTruthValidationError, match="non-negative"):
         CardinalityTruth("q", -1, PRODUCTION_EXACT_SOURCE)
+
+
+def test_frozen_legacy_production_artifact_keeps_its_semantic_digest() -> None:
+    legacy = Path(__file__).parents[1] / "fixtures" / "ground-truth-set-v1-legacy.json"
+    loaded = load_ground_truth_set(legacy, _snapshot())
+    assert loaded.source.kind == PRODUCTION_EXACT_SOURCE
+    assert loaded.computed_semantic_digest == (
+        "691fd528bad9feeb43ce88441b6863b6fad0d2c095567c1fdd8c8b9a60bce62c"
+    )
+    assert validate_ground_truth_set(legacy, _snapshot())["semantic_digest"] == (
+        "691fd528bad9feeb43ce88441b6863b6fad0d2c095567c1fdd8c8b9a60bce62c"
+    )
