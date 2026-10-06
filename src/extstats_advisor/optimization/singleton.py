@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+import time
+from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
@@ -285,23 +286,7 @@ def _validate_sources(snapshot: Any, candidate_universe: Any, repository: Any) -
         raise SingletonProfilingError("native repository candidate set does not match universe")
 
 
-def profile_singletons(
-    planner_session: Any,
-    snapshot: Any,
-    candidate_universe: Any,
-    native_repository: Any,
-    utility_provider: Any,
-    configuration_factory: Callable[[Iterable[str]], Any],
-    *,
-    ground_truth_semantic_digest: str,
-    sandbox_contract: str,
-    runtime_metadata: Mapping[str, Any] | None = None,
-) -> SingletonProfile:
-    """Evaluate baseline and every PRESENT singleton through one session."""
-
-    _validate_sources(snapshot, candidate_universe, native_repository)
-    snapshot_digest = snapshot.semantic_digest
-    query_ids = _positive_query_ids(snapshot, candidate_universe)
+def _utility_contracts(utility_provider: Any) -> tuple[str, str]:
     utility_contract = getattr(utility_provider, "utility_contract", None)
     if not isinstance(utility_contract, str) or not utility_contract:
         utility_contract = getattr(utility_provider, "contract_version", None)
@@ -310,50 +295,102 @@ def profile_singletons(
         raise SingletonProfilingError("utility provider contract is required")
     if not isinstance(loss_contract, str) or not loss_contract:
         raise SingletonProfilingError("utility provider loss contract is required")
-    if not _SHA256.fullmatch(ground_truth_semantic_digest):
-        raise SingletonProfilingError("ground truth semantic digest is invalid")
+    return utility_contract, loss_contract
 
-    def evaluate(candidate_ids: Sequence[str]) -> UtilityResult:
-        planner_session.activate(configuration_factory(candidate_ids))
-        estimates = planner_session.estimate_queries(query_ids)
-        estimate_map = {estimate.query_id: estimate.estimated_rows for estimate in estimates}
-        if tuple(estimate_map) != query_ids:
-            raise SingletonProfilingError("planner did not return the requested query estimates")
-        result = utility_provider.evaluate(estimate_map)
-        if result.loss_contract != loss_contract:
-            raise SingletonProfilingError("utility result loss contract changed during profiling")
-        return result
 
-    baseline_result = evaluate(())
-    repository_by_id = {
-        candidate.candidate_id: candidate for candidate in native_repository.candidate_models
+def _estimate_map(estimates: Sequence[Any], requested_query_ids: Sequence[str]) -> dict[str, float]:
+    estimate_ids = tuple(estimate.query_id for estimate in estimates)
+    if estimate_ids != tuple(requested_query_ids):
+        raise SingletonProfilingError("planner did not return the requested query estimates")
+    return {estimate.query_id: estimate.estimated_rows for estimate in estimates}
+
+
+def _percentile_95(values: Sequence[int]) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = max(0, math.ceil(0.95 * len(ordered)) - 1)
+    return float(ordered[index])
+
+
+def _incidence_runtime(
+    *,
+    present_candidate_ids: Sequence[str],
+    incidence_counts: Mapping[str, int],
+    baseline_query_count: int,
+    singleton_query_count: int,
+    strategy: str,
+    elapsed_seconds: float,
+) -> dict[str, Any]:
+    counts = {
+        candidate_id: incidence_counts[candidate_id] for candidate_id in present_candidate_ids
     }
-    profiles: list[CandidateSingletonProfile] = []
-    planner_query_estimate_count = baseline_result.query_count
-    for candidate in candidate_universe.candidates:
-        native = repository_by_id[candidate.candidate_id]
-        if native.state == ABSENT_NATIVE:
-            profiles.append(
-                CandidateSingletonProfile(
-                    candidate.candidate_id,
-                    native.state,
-                    candidate.static_precedence_rank,
-                    baseline_result.objective,
-                    0.0,
-                    None,
-                )
+    values = tuple(counts.values())
+    reference_count = baseline_query_count * (1 + len(present_candidate_ids))
+    saved_count = reference_count - (baseline_query_count + singleton_query_count)
+    summary = {
+        "min": min(values) if values else 0,
+        "mean": sum(values) / len(values) if values else 0.0,
+        "median": (
+            float(sorted(values)[len(values) // 2])
+            if values and len(values) % 2
+            else (
+                (sorted(values)[len(values) // 2 - 1] + sorted(values)[len(values) // 2]) / 2
+                if values
+                else 0.0
             )
-            continue
-        result = evaluate((candidate.candidate_id,))
-        planner_query_estimate_count += result.query_count
+        ),
+        "p95": _percentile_95(values),
+        "max": max(values) if values else 0,
+    }
+    return {
+        "evaluation_strategy": strategy,
+        "baseline_configuration_count": 1,
+        "singleton_configuration_count": len(present_candidate_ids),
+        "baseline_planner_query_estimate_count": baseline_query_count,
+        "singleton_planner_query_estimate_count": singleton_query_count,
+        "planner_query_estimate_count": baseline_query_count + singleton_query_count,
+        "full_workload_reference_planner_query_estimate_count": reference_count,
+        "saved_planner_query_estimate_count": saved_count,
+        "planner_query_reduction_fraction": (
+            saved_count / reference_count if reference_count else 0.0
+        ),
+        "candidate_incidence_counts": counts,
+        "candidate_incidence_summary": summary,
+        "zero_incidence_present_candidate_count": sum(value == 0 for value in values),
+        "profiling_wall_clock_seconds": elapsed_seconds,
+    }
+
+
+def _assemble_profile(
+    snapshot: Any,
+    candidate_universe: Any,
+    native_repository: Any,
+    utility_contract: str,
+    loss_contract: str,
+    baseline_result: UtilityResult,
+    candidate_results: Sequence[tuple[Any, UtilityResult]],
+    *,
+    ground_truth_semantic_digest: str,
+    sandbox_contract: str,
+    runtime: Mapping[str, Any],
+) -> SingletonProfile:
+    profiles: list[CandidateSingletonProfile] = []
+    for candidate, result in candidate_results:
+        native_state = next(
+            item.state
+            for item in native_repository.candidate_models
+            if item.candidate_id == candidate.candidate_id
+        )
+        frozen_rank = 1 if native_state == PRESENT else None
         profiles.append(
             CandidateSingletonProfile(
                 candidate.candidate_id,
-                native.state,
+                native_state,
                 candidate.static_precedence_rank,
                 result.objective,
                 baseline_result.objective - result.objective,
-                1,
+                frozen_rank,
             )
         )
     present_profiles = [profile for profile in profiles if profile.native_state == PRESENT]
@@ -378,21 +415,13 @@ def profile_singletons(
         )
         for profile in profiles
     )
-    backend_contract = str(native_repository.backend_contract)
-    profile_runtime = {
-        "baseline_configuration_count": 1,
-        "singleton_configuration_count": len(present_profiles),
-        "planner_query_estimate_count": planner_query_estimate_count,
-    }
-    if runtime_metadata:
-        profile_runtime.update(runtime_metadata)
     return SingletonProfile(
-        snapshot_digest,
+        snapshot.semantic_digest,
         candidate_universe.semantic_digest,
         native_repository.semantic_digest,
         ground_truth_semantic_digest,
         sandbox_contract,
-        backend_contract,
+        str(native_repository.backend_contract),
         native_repository.server_version,
         native_repository.server_version_num,
         native_repository.ordinary_stats_fingerprint,
@@ -402,5 +431,242 @@ def profile_singletons(
         BaselineProfile(baseline_result.objective),
         ranked_profiles,
         frozen_order,
-        profile_runtime,
+        runtime,
+    )
+
+
+def _validate_ground_truth_digest(ground_truth_semantic_digest: str) -> None:
+    if not _SHA256.fullmatch(ground_truth_semantic_digest):
+        raise SingletonProfilingError("ground truth semantic digest is invalid")
+
+
+def _validate_utility_result(result: UtilityResult, loss_contract: str) -> None:
+    if result.loss_contract != loss_contract:
+        raise SingletonProfilingError("utility result loss contract changed during profiling")
+
+
+def validate_nonincident_estimates_unchanged(
+    baseline_estimates: Mapping[str, float],
+    singleton_estimates: Mapping[str, float],
+    affected_query_ids: Sequence[str],
+) -> None:
+    """Fail closed when a full-workload audit changes a nonincident estimate."""
+
+    if set(singleton_estimates) != set(baseline_estimates):
+        raise SingletonProfilingError("singleton audit estimate coverage changed")
+    affected = set(affected_query_ids)
+    for query_id, baseline in baseline_estimates.items():
+        if query_id not in affected and singleton_estimates[query_id] != baseline:
+            raise SingletonProfilingError(
+                f"nonincident planner estimate changed for query {query_id!r}"
+            )
+
+
+def _profile_common_setup(
+    snapshot: Any,
+    candidate_universe: Any,
+    native_repository: Any,
+    utility_provider: Any,
+    *,
+    ground_truth_semantic_digest: str,
+) -> tuple[tuple[str, ...], str, str, dict[str, Any]]:
+    _validate_sources(snapshot, candidate_universe, native_repository)
+    if not callable(getattr(candidate_universe, "query_ids_for_candidate", None)):
+        raise SingletonProfilingError("candidate universe does not expose incidence indexes")
+    query_ids = _positive_query_ids(snapshot, candidate_universe)
+    utility_contract, loss_contract = _utility_contracts(utility_provider)
+    _validate_ground_truth_digest(ground_truth_semantic_digest)
+    repository_by_id = {
+        candidate.candidate_id: candidate for candidate in native_repository.candidate_models
+    }
+    return query_ids, utility_contract, loss_contract, repository_by_id
+
+
+def profile_singletons(
+    planner_session: Any,
+    snapshot: Any,
+    candidate_universe: Any,
+    native_repository: Any,
+    utility_provider: Any,
+    configuration_factory: Callable[[Iterable[str]], Any],
+    *,
+    ground_truth_semantic_digest: str,
+    sandbox_contract: str,
+    runtime_metadata: Mapping[str, Any] | None = None,
+    estimate_audit: MutableMapping[str, Any] | None = None,
+) -> SingletonProfile:
+    """Evaluate singleton utilities using exact incidence-incremental calls."""
+
+    started = time.perf_counter()
+    query_ids, utility_contract, loss_contract, repository_by_id = _profile_common_setup(
+        snapshot,
+        candidate_universe,
+        native_repository,
+        utility_provider,
+        ground_truth_semantic_digest=ground_truth_semantic_digest,
+    )
+
+    def evaluate(query_subset: Sequence[str]) -> dict[str, float]:
+        estimates = planner_session.estimate_queries(query_subset)
+        return _estimate_map(estimates, query_subset)
+
+    planner_session.activate(configuration_factory(()))
+    baseline_estimates = evaluate(query_ids)
+    if estimate_audit is not None:
+        estimate_audit["baseline"] = dict(baseline_estimates)
+        estimate_audit["singletons"] = {}
+    baseline_result = utility_provider.evaluate(baseline_estimates)
+    _validate_utility_result(baseline_result, loss_contract)
+    candidate_results: list[tuple[Any, UtilityResult]] = []
+    singleton_query_estimate_count = 0
+    incidence_counts: dict[str, int] = {}
+    for candidate in candidate_universe.candidates:
+        native = repository_by_id[candidate.candidate_id]
+        if native.state == ABSENT_NATIVE:
+            candidate_results.append((candidate, baseline_result))
+            continue
+        incidence = tuple(candidate_universe.query_ids_for_candidate(candidate.candidate_id))
+        unknown = set(incidence).difference(query_ids)
+        if unknown:
+            raise SingletonProfilingError(
+                f"candidate incidence references queries outside profiling scope: {sorted(unknown)}"
+            )
+        incidence_set = set(incidence)
+        affected = tuple(query_id for query_id in query_ids if query_id in incidence_set)
+        incidence_counts[candidate.candidate_id] = len(affected)
+        if not affected:
+            if estimate_audit is not None:
+                estimate_audit["singletons"][candidate.candidate_id] = dict(baseline_estimates)
+            candidate_results.append((candidate, baseline_result))
+            continue
+        planner_session.activate(configuration_factory((candidate.candidate_id,)))
+        singleton_estimates = evaluate(affected)
+        singleton_query_estimate_count += len(affected)
+        merged_estimates = dict(baseline_estimates)
+        merged_estimates.update(singleton_estimates)
+        if tuple(merged_estimates) != query_ids:
+            raise SingletonProfilingError("incremental estimates did not cover the full workload")
+        if estimate_audit is not None:
+            estimate_audit["singletons"][candidate.candidate_id] = dict(merged_estimates)
+        result = utility_provider.evaluate(merged_estimates)
+        _validate_utility_result(result, loss_contract)
+        candidate_results.append((candidate, result))
+
+    present_profiles = [
+        candidate
+        for candidate, _ in candidate_results
+        if repository_by_id[candidate.candidate_id].state == PRESENT
+    ]
+    runtime = _incidence_runtime(
+        present_candidate_ids=[candidate.candidate_id for candidate in present_profiles],
+        incidence_counts=incidence_counts,
+        baseline_query_count=len(query_ids),
+        singleton_query_count=singleton_query_estimate_count,
+        strategy="incidence-incremental-v1",
+        elapsed_seconds=time.perf_counter() - started,
+    )
+    if runtime_metadata:
+        runtime.update(runtime_metadata)
+    return _assemble_profile(
+        snapshot,
+        candidate_universe,
+        native_repository,
+        utility_contract,
+        loss_contract,
+        baseline_result,
+        candidate_results,
+        ground_truth_semantic_digest=ground_truth_semantic_digest,
+        sandbox_contract=sandbox_contract,
+        runtime=runtime,
+    )
+
+
+def profile_singletons_full_workload_reference(
+    planner_session: Any,
+    snapshot: Any,
+    candidate_universe: Any,
+    native_repository: Any,
+    utility_provider: Any,
+    configuration_factory: Callable[[Iterable[str]], Any],
+    *,
+    ground_truth_semantic_digest: str,
+    sandbox_contract: str,
+    runtime_metadata: Mapping[str, Any] | None = None,
+    estimate_audit: MutableMapping[str, Any] | None = None,
+) -> SingletonProfile:
+    """Reference evaluator retaining the pre-incremental full-workload behavior."""
+
+    started = time.perf_counter()
+    query_ids, utility_contract, loss_contract, repository_by_id = _profile_common_setup(
+        snapshot,
+        candidate_universe,
+        native_repository,
+        utility_provider,
+        ground_truth_semantic_digest=ground_truth_semantic_digest,
+    )
+
+    def evaluate(candidate_ids: Sequence[str]) -> UtilityResult:
+        planner_session.activate(configuration_factory(candidate_ids))
+        estimates = planner_session.estimate_queries(query_ids)
+        estimate_map = _estimate_map(estimates, query_ids)
+        result = utility_provider.evaluate(estimate_map)
+        _validate_utility_result(result, loss_contract)
+        return result
+
+    baseline_result = evaluate(())
+    if estimate_audit is not None:
+        estimate_audit["baseline"] = {
+            item.query_id: item.estimate for item in baseline_result.per_query
+        }
+        estimate_audit["singletons"] = {}
+    candidate_results: list[tuple[Any, UtilityResult]] = []
+    incidence_counts: dict[str, int] = {}
+    for candidate in candidate_universe.candidates:
+        native = repository_by_id[candidate.candidate_id]
+        incidence_counts[candidate.candidate_id] = len(
+            set(candidate_universe.query_ids_for_candidate(candidate.candidate_id)).intersection(
+                query_ids
+            )
+        )
+        result = (
+            baseline_result
+            if native.state == ABSENT_NATIVE
+            else evaluate((candidate.candidate_id,))
+        )
+        if estimate_audit is not None and native.state == PRESENT:
+            estimate_audit["singletons"][candidate.candidate_id] = {
+                item.query_id: item.estimate for item in result.per_query
+            }
+        candidate_results.append(
+            (
+                candidate,
+                result,
+            )
+        )
+    present_profiles = [
+        candidate
+        for candidate, _ in candidate_results
+        if repository_by_id[candidate.candidate_id].state == PRESENT
+    ]
+    runtime = _incidence_runtime(
+        present_candidate_ids=[candidate.candidate_id for candidate in present_profiles],
+        incidence_counts=incidence_counts,
+        baseline_query_count=len(query_ids),
+        singleton_query_count=len(query_ids) * len(present_profiles),
+        strategy="full-workload-reference-v1",
+        elapsed_seconds=time.perf_counter() - started,
+    )
+    if runtime_metadata:
+        runtime.update(runtime_metadata)
+    return _assemble_profile(
+        snapshot,
+        candidate_universe,
+        native_repository,
+        utility_contract,
+        loss_contract,
+        baseline_result,
+        candidate_results,
+        ground_truth_semantic_digest=ground_truth_semantic_digest,
+        sandbox_contract=sandbox_contract,
+        runtime=runtime,
     )

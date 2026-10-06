@@ -7,6 +7,7 @@ import os
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from extstats_advisor.candidates.groups import RelevantGroup, derive_relevant_groups
@@ -80,6 +81,37 @@ class CandidateUniverse:
         self.candidates = candidates
         self.incidence = incidence
         self._validate()
+        self._build_runtime_indexes()
+
+    def _build_runtime_indexes(self) -> None:
+        """Build immutable runtime indexes from the sealed incidence relation.
+
+        These indexes are deliberately not part of the serialized artifact or its
+        semantic digest.  They are an execution optimization over the canonical
+        incidence tuples, whose ordering remains the source of truth.
+        """
+
+        query_to_candidates: dict[str, list[str]] = {
+            profile.query_id: [] for profile in self.query_profiles
+        }
+        candidate_to_queries: dict[str, list[str]] = {
+            candidate.candidate_id: [] for candidate in self.candidates
+        }
+        for item in self.incidence:
+            query_to_candidates[item.query_id].append(item.candidate_id)
+            candidate_to_queries[item.candidate_id].append(item.query_id)
+        self._candidate_ids_by_query = MappingProxyType(
+            {
+                query_id: tuple(candidate_ids)
+                for query_id, candidate_ids in query_to_candidates.items()
+            }
+        )
+        self._query_ids_by_candidate = MappingProxyType(
+            {
+                candidate_id: tuple(query_ids)
+                for candidate_id, query_ids in candidate_to_queries.items()
+            }
+        )
 
     def _validate(self) -> None:
         if len(self.source_snapshot_semantic_digest) != 64 or any(
@@ -147,10 +179,10 @@ class CandidateUniverse:
             seen_incidence.add(key)
 
     def candidate_ids_for_query(self, query_id: str) -> tuple[str, ...]:
-        return tuple(item.candidate_id for item in self.incidence if item.query_id == query_id)
+        return self._candidate_ids_by_query.get(query_id, ())
 
     def query_ids_for_candidate(self, candidate_id: str) -> tuple[str, ...]:
-        return tuple(item.query_id for item in self.incidence if item.candidate_id == candidate_id)
+        return self._query_ids_by_candidate.get(candidate_id, ())
 
     def to_dict(self) -> dict[str, Any]:
         value = {

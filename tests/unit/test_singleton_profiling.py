@@ -19,6 +19,8 @@ from extstats_advisor.optimization.singleton import (
     CandidateSingletonProfile,
     SingletonProfile,
     profile_singletons,
+    profile_singletons_full_workload_reference,
+    validate_nonincident_estimates_unchanged,
 )
 from extstats_advisor.snapshot.model import Workload, WorkloadQuery
 from extstats_advisor.utility.model import PerQueryUtility, UtilityResult
@@ -53,6 +55,11 @@ def _sources() -> tuple[SimpleNamespace, SimpleNamespace, SimpleNamespace]:
             SimpleNamespace(query_id=query_id, analysis_status="supported")
             for query_id in ("q1", "q2", "q_zero")
         ),
+        query_ids_for_candidate=lambda candidate_id: {
+            candidates[0].candidate_id: ("q1",),
+            candidates[1].candidate_id: ("q2",),
+            candidates[2].candidate_id: (),
+        }[candidate_id],
     )
     native = []
     for index, candidate in enumerate(candidates):
@@ -111,9 +118,15 @@ class _FakePlanner:
         ids = tuple(query_ids)
         self.estimate_calls.append(ids)
         active = self.configurations[-1]
-        base = {(): 10, (self._candidates[0],): 8, (self._candidates[1],): 8}[active]
         return tuple(
-            SimpleNamespace(query_id=query_id, estimated_rows=base + index)
+            SimpleNamespace(
+                query_id=query_id,
+                estimated_rows={
+                    (): {"q1": 10, "q2": 11},
+                    (self._candidates[0],): {"q1": 8, "q2": 11},
+                    (self._candidates[1],): {"q1": 10, "q2": 8},
+                }[active][query_id],
+            )
             for index, query_id in enumerate(ids)
         )
 
@@ -156,7 +169,7 @@ def test_singleton_profiling_evaluates_baseline_and_present_candidates_once() ->
         (universe.candidates[0].candidate_id,),
         (universe.candidates[1].candidate_id,),
     ]
-    assert planner.estimate_calls == [("q1", "q2")] * 3
+    assert planner.estimate_calls == [("q1", "q2"), ("q1",), ("q2",)]
     assert len(utility.calls) == 3
     assert profile.baseline.objective == 21
     assert profile.present_count == 2
@@ -172,7 +185,113 @@ def test_singleton_profiling_evaluates_baseline_and_present_candidates_once() ->
     assert absent.frozen_precedence_rank is None
     assert profile.runtime_metadata["baseline_configuration_count"] == 1
     assert profile.runtime_metadata["singleton_configuration_count"] == 2
-    assert profile.runtime_metadata["planner_query_estimate_count"] == 6
+    assert profile.runtime_metadata["baseline_planner_query_estimate_count"] == 2
+    assert profile.runtime_metadata["singleton_planner_query_estimate_count"] == 2
+    assert profile.runtime_metadata["planner_query_estimate_count"] == 4
+    assert profile.runtime_metadata["full_workload_reference_planner_query_estimate_count"] == 6
+    assert profile.runtime_metadata["saved_planner_query_estimate_count"] == 2
+    assert profile.runtime_metadata["candidate_incidence_counts"] == {
+        universe.candidates[0].candidate_id: 1,
+        universe.candidates[1].candidate_id: 1,
+    }
+
+
+def test_incremental_profile_matches_full_workload_reference_semantics() -> None:
+    snapshot, universe, repository = _sources()
+    incremental_planner = _FakePlanner()
+    incremental_planner._candidates = [
+        candidate.candidate_id for candidate in universe.candidates[:2]
+    ]
+    incremental_audit = {}
+    incremental = profile_singletons(
+        incremental_planner,
+        snapshot,
+        universe,
+        repository,
+        _FakeUtility(),
+        lambda ids: SimpleNamespace(ordered_candidate_ids=tuple(ids)),
+        ground_truth_semantic_digest="e" * 64,
+        sandbox_contract="sandbox-v1",
+        estimate_audit=incremental_audit,
+    )
+    reference_planner = _FakePlanner()
+    reference_planner._candidates = [
+        candidate.candidate_id for candidate in universe.candidates[:2]
+    ]
+    reference_audit = {}
+    reference = profile_singletons_full_workload_reference(
+        reference_planner,
+        snapshot,
+        universe,
+        repository,
+        _FakeUtility(),
+        lambda ids: SimpleNamespace(ordered_candidate_ids=tuple(ids)),
+        ground_truth_semantic_digest="e" * 64,
+        sandbox_contract="sandbox-v1",
+        estimate_audit=reference_audit,
+    )
+
+    assert incremental.computed_semantic_digest == reference.computed_semantic_digest
+    assert incremental.candidate_profiles == reference.candidate_profiles
+    assert incremental.frozen_ordered_candidate_ids == reference.frozen_ordered_candidate_ids
+    assert incremental.runtime_metadata["evaluation_strategy"] == "incidence-incremental-v1"
+    assert reference.runtime_metadata["evaluation_strategy"] == "full-workload-reference-v1"
+    assert reference_planner.estimate_calls == [("q1", "q2")] * 3
+    for candidate_id in (universe.candidates[0].candidate_id, universe.candidates[1].candidate_id):
+        validate_nonincident_estimates_unchanged(
+            reference_audit["baseline"],
+            reference_audit["singletons"][candidate_id],
+            universe.query_ids_for_candidate(candidate_id),
+        )
+    assert incremental_audit["singletons"][universe.candidates[0].candidate_id] == {
+        "q1": 8,
+        "q2": 11,
+    }
+
+
+def test_present_empty_incidence_is_baseline_equivalent_without_planner_call() -> None:
+    snapshot, universe, repository = _sources()
+    native = list(repository.candidate_models)
+    absent = native[-1]
+    native[-1] = NativeStatsCandidate(
+        absent.candidate_id,
+        absent.relation_id,
+        absent.kind,
+        absent.column_ordinals,
+        absent.column_names,
+        PRESENT,
+        "fixture",
+        1,
+        "a" * 64,
+        f"payloads/{absent.candidate_id}.bin",
+    )
+    present_repository = SimpleNamespace(
+        source_snapshot_semantic_digest=repository.source_snapshot_semantic_digest,
+        candidate_universe_semantic_digest=repository.candidate_universe_semantic_digest,
+        semantic_digest=repository.semantic_digest,
+        backend_contract=repository.backend_contract,
+        server_version=repository.server_version,
+        server_version_num=repository.server_version_num,
+        ordinary_stats_fingerprint=repository.ordinary_stats_fingerprint,
+        candidate_models=tuple(native),
+    )
+    planner = _FakePlanner()
+    planner._candidates = [candidate.candidate_id for candidate in universe.candidates[:2]]
+    profile = profile_singletons(
+        planner,
+        snapshot,
+        universe,
+        present_repository,
+        _FakeUtility(),
+        lambda ids: SimpleNamespace(ordered_candidate_ids=tuple(ids)),
+        ground_truth_semantic_digest="e" * 64,
+        sandbox_contract="sandbox-v1",
+    )
+
+    assert planner.estimate_calls == [("q1", "q2"), ("q1",), ("q2",)]
+    assert profile.present_count == 3
+    assert profile.runtime_metadata["zero_incidence_present_candidate_count"] == 1
+    assert profile.candidate_profiles[-1].singleton_objective == profile.baseline.objective
 
 
 def _manual_profile(**kwargs) -> SingletonProfile:

@@ -51,6 +51,8 @@ from extstats_advisor.optimization.singleton import (
     CandidateSingletonProfile,
     SingletonProfile,
     profile_singletons,
+    profile_singletons_full_workload_reference,
+    validate_nonincident_estimates_unchanged,
 )
 
 __all__ = [
@@ -86,6 +88,8 @@ __all__ = [
     "load_search_result",
     "load_singleton_profile",
     "profile_singletons",
+    "profile_singletons_full_workload_reference",
+    "validate_nonincident_estimates_unchanged",
     "validate_optimization_plan",
     "validate_search_result",
     "validate_singleton_profile",

@@ -49,6 +49,13 @@ def test_candidate_universe_roundtrip_and_snapshot_binding(tmp_path: Path) -> No
     assert summary["candidate_count"] == 6
     assert loaded.candidate_ids_for_query("q1")
     assert loaded.query_ids_for_candidate(loaded.candidates[0].candidate_id) == ("q1",)
+    assert loaded.to_dict() == universe.to_dict()
+    assert {query_id: loaded.candidate_ids_for_query(query_id) for query_id in ("q1",)} == {
+        query_id: tuple(item.candidate_id for item in loaded.incidence if item.query_id == query_id)
+        for query_id in ("q1",)
+    }
+    with pytest.raises(TypeError):
+        loaded._query_ids_by_candidate[loaded.candidates[0].candidate_id] = ()
     assert snapshot_path.is_dir()
 
 
