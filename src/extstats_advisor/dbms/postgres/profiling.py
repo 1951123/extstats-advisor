@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from typing import Any
 
 from extstats_advisor.dbms.postgres.planner import PostgresStatisticsConfiguration
@@ -23,6 +23,7 @@ def profile_postgres_singletons(
     *,
     ground_truth_semantic_digest: str,
     runtime_metadata: Mapping[str, Any] | None = None,
+    estimate_audit: MutableMapping[str, Any] | None = None,
 ) -> SingletonProfile:
     """Profile baseline and all PRESENT native candidates on one session."""
 
@@ -36,6 +37,7 @@ def profile_postgres_singletons(
         ground_truth_semantic_digest=ground_truth_semantic_digest,
         sandbox_contract=POSTGRES_PLANNER_SANDBOX_CONTRACT,
         runtime_metadata=runtime_metadata,
+        estimate_audit=estimate_audit,
     )
 
 
