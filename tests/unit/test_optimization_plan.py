@@ -81,7 +81,7 @@ def test_budget_contract_and_screening_prefix_retain_negative_singletons() -> No
     profile = _profile()
     plan = create_optimization_plan(profile, candidate_limit=3)
 
-    assert plan.budget == OptimizationBudget(3)
+    assert plan.budget == OptimizationBudget(3, max_statistics_count=3)
     assert plan.budget.wall_clock_seconds == DEFAULT_WALL_CLOCK_SECONDS
     assert plan.screened_candidate_ids == (
         "candidate_positive",
@@ -94,6 +94,12 @@ def test_budget_contract_and_screening_prefix_retain_negative_singletons() -> No
     assert plan.neutral_singleton_count == 1
     assert plan.negative_singleton_count == 1
     assert plan.worst_case_add_configuration_evaluations_after_singletons == 3
+
+
+def test_explicit_none_retains_v1_reference_plan() -> None:
+    plan = create_optimization_plan(_profile(), candidate_limit=3, max_statistics_count=None)
+    assert plan.budget == OptimizationBudget(3)
+    assert plan.semantic_manifest()["format_version"] == OPTIMIZATION_PLAN_FORMAT_VERSION
 
 
 @pytest.mark.parametrize(
@@ -165,7 +171,9 @@ def test_worst_case_evaluation_formula() -> None:
 
 def test_plan_artifact_is_deterministic_bound_and_rejects_tampering(tmp_path) -> None:
     profile = _profile()
-    plan = create_optimization_plan(profile, candidate_limit=2, wall_clock_seconds=42.5)
+    plan = create_optimization_plan(
+        profile, candidate_limit=2, max_statistics_count=None, wall_clock_seconds=42.5
+    )
     runtime_variant = replace(plan, runtime_metadata={"elapsed_seconds": 9.0}, created_at="later")
     first_path = tmp_path / "optimization-plan-v1.json"
     second_path = tmp_path / "optimization-plan-v1-second.json"

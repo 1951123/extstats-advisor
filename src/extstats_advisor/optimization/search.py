@@ -604,6 +604,7 @@ def greedy_add_search(
 
 ConfigurationPreparation = Callable[[frozenset[str], SearchDeadline], None]
 ConfigurationCommit = Callable[[frozenset[str]], None]
+ConfigurationDiscard = Callable[[], None]
 
 
 def greedy_add_search_incremental(
@@ -617,6 +618,7 @@ def greedy_add_search_incremental(
     runtime_metadata_provider: RuntimeMetadataProvider | None = None,
     prepare_initial_configuration: ConfigurationPreparation | None = None,
     commit_configuration: ConfigurationCommit | None = None,
+    discard_proposals: ConfigurationDiscard | None = None,
 ) -> SearchResult:
     """Run v2 Greedy ADD over an exact incremental configuration evaluator.
 
@@ -650,6 +652,8 @@ def greedy_add_search_incremental(
     current_objective = singleton_profile.baseline.objective
 
     def finish(termination_reason: str) -> SearchResult:
+        if discard_proposals is not None:
+            discard_proposals()
         runtime = {
             "evaluation_strategy": "incidence-incremental-greedy-v1",
             "cached_singleton_configuration_count": len(screened),
@@ -667,6 +671,7 @@ def greedy_add_search_incremental(
             "max_statistics_count": maximum,
             "screening_width": len(screened),
             "search_wall_clock_seconds": plan.budget.wall_clock_seconds,
+            "search_budget_seconds": plan.budget.wall_clock_seconds,
             "termination_reason": termination_reason,
             "elapsed_search_seconds": max(0.0, deadline.now() - deadline.started_at),
         }
@@ -730,6 +735,18 @@ def greedy_add_search_incremental(
     except SearchBudgetExpired:
         return finish(TERMINATION_BUDGET_BEFORE_ROUND)
 
+    first_membership = frozenset((best_singleton.candidate_id,))
+    if prepare_initial_configuration is not None:
+        try:
+            prepare_initial_configuration(first_membership, deadline)
+            deadline.ensure_available()
+        except SearchBudgetExpired:
+            return finish(TERMINATION_BUDGET_BEFORE_ROUND)
+    else:
+        try:
+            deadline.ensure_available()
+        except SearchBudgetExpired:
+            return finish(TERMINATION_BUDGET_BEFORE_ROUND)
     current_membership.add(best_singleton.candidate_id)
     accepted_moves.append(
         AcceptedMove(
@@ -742,11 +759,6 @@ def greedy_add_search_incremental(
         )
     )
     current_objective = best_singleton.singleton_objective
-    if prepare_initial_configuration is not None:
-        try:
-            prepare_initial_configuration(frozenset(current_membership), deadline)
-        except SearchBudgetExpired:
-            return finish(TERMINATION_BUDGET_BEFORE_ROUND)
     terminal = finish_after_acceptance()
     if terminal is not None:
         return terminal
@@ -806,6 +818,11 @@ def greedy_add_search_incremental(
         if best.objective >= current_objective:
             return finish(TERMINATION_LOCAL_OPTIMUM)
         proposed_membership = frozenset((*current_membership, best.candidate_id))
+        try:
+            deadline.ensure_available()
+        except SearchBudgetExpired:
+            partial_final_round_evaluation_count = len(evaluations)
+            return finish(TERMINATION_BUDGET_INCOMPLETE_ROUND)
         if commit_configuration is not None:
             commit_configuration(proposed_membership)
         current_membership.add(best.candidate_id)

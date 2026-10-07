@@ -107,7 +107,7 @@ def _utility_result(objective: float) -> UtilityResult:
 
 def test_greedy_add_reuses_singletons_and_accepts_interaction_gain() -> None:
     profile = _profile()
-    plan = create_optimization_plan(profile, candidate_limit=3)
+    plan = create_optimization_plan(profile, candidate_limit=3, max_statistics_count=None)
     calls: list[tuple[str, ...]] = []
     objectives = {
         ("A", "B"): 6.0,
@@ -134,7 +134,7 @@ def test_greedy_add_reuses_singletons_and_accepts_interaction_gain() -> None:
 
 def test_negative_singleton_can_be_accepted_by_later_interaction() -> None:
     profile = _profile((7.0, 8.0, 12.0))
-    plan = create_optimization_plan(profile, candidate_limit=3)
+    plan = create_optimization_plan(profile, candidate_limit=3, max_statistics_count=None)
 
     def evaluate(membership, _deadline):
         return _utility_result(
@@ -151,7 +151,7 @@ def test_negative_singleton_can_be_accepted_by_later_interaction() -> None:
 
 def test_tie_uses_earlier_screened_position_and_no_singleton_live_calls() -> None:
     profile = _profile()
-    plan = create_optimization_plan(profile, candidate_limit=3)
+    plan = create_optimization_plan(profile, candidate_limit=3, max_statistics_count=None)
     calls = []
 
     def evaluate(membership, _deadline):
@@ -168,7 +168,7 @@ def test_tie_uses_earlier_screened_position_and_no_singleton_live_calls() -> Non
 
 def test_no_improving_singleton_terminates_without_live_evaluation() -> None:
     profile = _profile((10.0, 10.0, 12.0))
-    plan = create_optimization_plan(profile, candidate_limit=3)
+    plan = create_optimization_plan(profile, candidate_limit=3, max_statistics_count=None)
 
     def fail_evaluate(_membership, _deadline):
         raise AssertionError("singleton round must use the profile cache")
@@ -182,7 +182,9 @@ def test_no_improving_singleton_terminates_without_live_evaluation() -> None:
 
 def test_budget_expiry_discards_incomplete_round() -> None:
     profile = _profile()
-    plan = create_optimization_plan(profile, candidate_limit=3, wall_clock_seconds=1.0)
+    plan = create_optimization_plan(
+        profile, candidate_limit=3, max_statistics_count=None, wall_clock_seconds=1.0
+    )
     clock = _Clock()
     calls = []
 
@@ -204,7 +206,9 @@ def test_budget_expiry_discards_incomplete_round() -> None:
 
 def test_budget_expiry_on_first_live_evaluation_is_incomplete_round(tmp_path) -> None:
     profile = _profile()
-    plan = create_optimization_plan(profile, candidate_limit=3, wall_clock_seconds=1.0)
+    plan = create_optimization_plan(
+        profile, candidate_limit=3, max_statistics_count=None, wall_clock_seconds=1.0
+    )
     calls = []
 
     def evaluate(membership, _deadline):
@@ -226,7 +230,9 @@ def test_budget_expiry_on_first_live_evaluation_is_incomplete_round(tmp_path) ->
 def test_budget_expiry_before_round_keeps_last_accepted_state(tmp_path) -> None:
     values = iter((0.0, 2.0, 2.0))
     profile = _profile()
-    plan = create_optimization_plan(profile, candidate_limit=3, wall_clock_seconds=1.0)
+    plan = create_optimization_plan(
+        profile, candidate_limit=3, max_statistics_count=None, wall_clock_seconds=1.0
+    )
     calls = []
 
     def clock():
@@ -257,7 +263,9 @@ def test_budget_expiry_before_round_keeps_last_accepted_state(tmp_path) -> None:
 def test_budget_expiry_after_all_evaluations_before_commit_discards_round(tmp_path) -> None:
     values = iter((0.0,) * 8 + (2.0, 2.0))
     profile = _profile()
-    plan = create_optimization_plan(profile, candidate_limit=3, wall_clock_seconds=1.0)
+    plan = create_optimization_plan(
+        profile, candidate_limit=3, max_statistics_count=None, wall_clock_seconds=1.0
+    )
     calls = []
 
     def clock():
@@ -284,7 +292,9 @@ def test_budget_expiry_after_all_evaluations_before_commit_discards_round(tmp_pa
 def test_budget_expiry_during_cached_first_round_does_not_accept_singleton() -> None:
     values = iter((0.0, 0.0, 0.0, 2.0, 2.0))
     profile = _profile()
-    plan = create_optimization_plan(profile, candidate_limit=3, wall_clock_seconds=1.0)
+    plan = create_optimization_plan(
+        profile, candidate_limit=3, max_statistics_count=None, wall_clock_seconds=1.0
+    )
 
     def clock():
         return next(values)
@@ -306,7 +316,7 @@ def test_budget_expiry_during_cached_first_round_does_not_accept_singleton() -> 
 
 def test_search_result_artifact_is_deterministic_and_validated(tmp_path) -> None:
     profile = _profile()
-    plan = create_optimization_plan(profile, candidate_limit=3)
+    plan = create_optimization_plan(profile, candidate_limit=3, max_statistics_count=None)
 
     def evaluate(membership, _deadline):
         return _utility_result(
@@ -343,7 +353,7 @@ def test_postgres_timeout_cancellation_maps_to_budget_expiry() -> None:
         query_profiles=(SimpleNamespace(query_id="q1", analysis_status="supported"),)
     )
     profile = _profile()
-    plan = create_optimization_plan(profile, candidate_limit=3)
+    plan = create_optimization_plan(profile, candidate_limit=3, max_statistics_count=None)
     session = SimpleNamespace(
         timeouts=[],
         set_statement_timeout_ms=lambda timeout: session.timeouts.append(timeout),

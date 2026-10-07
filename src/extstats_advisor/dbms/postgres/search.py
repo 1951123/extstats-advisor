@@ -138,6 +138,8 @@ class IncrementalPostgresSearchEvaluator:
         plan: OptimizationPlan,
         utility_provider: Any,
         query_ids: Sequence[str] | None = None,
+        *,
+        expected_baseline_objective: float | None = None,
     ) -> None:
         self._session = planner_session
         self._snapshot = snapshot
@@ -170,12 +172,17 @@ class IncrementalPostgresSearchEvaluator:
         self._current_membership: frozenset[str] | None = None
         self._current_estimates: dict[str, int] | None = None
         self._proposal_cache: dict[frozenset[str], tuple[UtilityResult, dict[str, int]]] = {}
+        self._expected_baseline_objective = expected_baseline_objective
         self._planner_query_estimate_count = 0
         self.baseline_materialization_planner_calls = 0
         self.first_winner_materialization_planner_calls = 0
+        self.winner_materialization_planner_calls = 0
         self.proposal_configuration_evaluations = 0
         self.proposal_planner_query_calls = 0
         self.audit_planner_query_calls = 0
+        self.incumbent_estimate_count = 0
+        self.peak_proposal_cache_entries = 0
+        self.peak_cached_estimate_entries = 0
 
     @staticmethod
     def _timeout_ms(deadline: SearchDeadline) -> int:
@@ -216,9 +223,14 @@ class IncrementalPostgresSearchEvaluator:
             self._planner_query_estimate_count += 1
             if accounting == "proposal":
                 self.proposal_planner_query_calls += 1
+            elif accounting == "baseline":
+                self.baseline_materialization_planner_calls += 1
+            elif accounting == "winner":
+                self.first_winner_materialization_planner_calls += 1
+                self.winner_materialization_planner_calls += 1
             elif accounting == "audit":
                 self.audit_planner_query_calls += 1
-            elif accounting not in {"baseline", "winner"}:
+            else:
                 raise SearchError(f"unknown planner-query accounting class: {accounting}")
             deadline.ensure_available()
             estimates[query_id] = estimate.estimated_rows
@@ -237,13 +249,37 @@ class IncrementalPostgresSearchEvaluator:
         baseline = self._estimate_query_ids(
             (), tuple(self._query_ids), deadline, accounting="baseline"
         )
-        self.baseline_materialization_planner_calls = len(baseline)
-        winner = self._estimate_query_ids(
-            ordered, tuple(self._query_ids), deadline, accounting="winner"
+        baseline_result = self._utility.evaluate(baseline)
+        if baseline_result.loss_contract != self._utility.loss_contract:
+            raise SearchError("utility result loss contract changed during search")
+        if (
+            self._expected_baseline_objective is not None
+            and baseline_result.objective != self._expected_baseline_objective
+        ):
+            raise SearchError("materialized baseline objective differs from singleton profile")
+        candidate_id = next(iter(membership))
+        affected = self._candidate_query_ids(candidate_id)
+        winner = self._estimate_query_ids(ordered, affected, deadline, accounting="winner")
+        materialized = dict(baseline)
+        materialized.update(winner)
+        winner_result = self._utility.evaluate(materialized)
+        if winner_result.loss_contract != self._utility.loss_contract:
+            raise SearchError("utility result loss contract changed during search")
+        expected = next(
+            (
+                record.singleton_objective
+                for record in self._plan.screened_candidates
+                if record.candidate_id == candidate_id
+            ),
+            None,
         )
-        self.first_winner_materialization_planner_calls = len(winner)
+        if expected is None or winner_result.objective != expected:
+            raise SearchError("materialized first winner objective differs from singleton profile")
+        deadline.ensure_available()
+        self._proposal_cache.clear()
         self._current_membership = membership
-        self._current_estimates = winner
+        self._current_estimates = materialized
+        self.incumbent_estimate_count = len(materialized)
 
     def __call__(self, membership: frozenset[str], deadline: SearchDeadline) -> UtilityResult:
         if self._current_membership is None or self._current_estimates is None:
@@ -264,7 +300,14 @@ class IncrementalPostgresSearchEvaluator:
             raise SearchError("utility result loss contract changed during search")
         deadline.ensure_available()
         self.proposal_configuration_evaluations += 1
-        self._proposal_cache[proposed] = (result, merged)
+        self._proposal_cache[proposed] = (result, dict(changed))
+        self.peak_proposal_cache_entries = max(
+            self.peak_proposal_cache_entries, len(self._proposal_cache)
+        )
+        self.peak_cached_estimate_entries = max(
+            self.peak_cached_estimate_entries,
+            sum(len(patch) for _, patch in self._proposal_cache.values()),
+        )
         return result
 
     def commit_configuration(self, membership: frozenset[str]) -> None:
@@ -272,8 +315,19 @@ class IncrementalPostgresSearchEvaluator:
         cached = self._proposal_cache.get(proposed)
         if cached is None:
             raise SearchError("accepted incremental proposal has no cached estimate map")
+        if self._current_estimates is None:
+            raise SearchError("incremental evaluator has no committed estimate map")
+        committed = dict(self._current_estimates)
+        committed.update(cached[1])
         self._current_membership = proposed
-        self._current_estimates = dict(cached[1])
+        self._current_estimates = committed
+        self.incumbent_estimate_count = len(committed)
+        self._proposal_cache.clear()
+
+    def discard_proposals(self) -> None:
+        """Discard uncommitted proposal patches after a round or termination."""
+
+        self._proposal_cache.clear()
 
     def audit_configuration_transition(
         self,
@@ -319,7 +373,12 @@ class IncrementalPostgresSearchEvaluator:
         }
 
     def runtime_metadata(self) -> Mapping[str, Any]:
-        actual = self._planner_query_estimate_count
+        actual = (
+            self.baseline_materialization_planner_calls
+            + self.winner_materialization_planner_calls
+            + self.proposal_planner_query_calls
+        )
+        actual_including_audit = actual + self.audit_planner_query_calls
         # This is the old search's full-workload call count for the same
         # completed proposal evaluations.  Singleton objectives were already
         # cached by the profile and are therefore not part of this reference.
@@ -327,16 +386,30 @@ class IncrementalPostgresSearchEvaluator:
         return {
             "baseline_materialization_planner_calls": self.baseline_materialization_planner_calls,
             "first_winner_materialization_planner_calls": self.first_winner_materialization_planner_calls,
+            "winner_materialization_planner_calls": self.winner_materialization_planner_calls,
             "proposal_configuration_evaluations": self.proposal_configuration_evaluations,
             "proposal_planner_query_calls": self.proposal_planner_query_calls,
             "planner_query_estimate_count": actual,
+            "planner_query_estimate_count_including_audit": actual_including_audit,
+            "actual_search_planner_calls": actual,
+            "actual_search_planner_calls_including_audit": actual_including_audit,
             "reference_full_workload_planner_calls": reference,
+            "reference_search_planner_calls": reference,
             "saved_planner_query_calls": reference - actual,
+            "saved_search_planner_calls": reference - actual,
+            "proposal_only_reference_planner_calls": reference,
+            "proposal_only_saved_planner_calls": reference - self.proposal_planner_query_calls,
+            "end_to_end_search_planner_calls": actual,
+            "end_to_end_saved_search_planner_calls": reference - actual,
             "planner_query_reduction_fraction": (
                 (reference - actual) / reference if reference else 0.0
             ),
             "audit_planner_query_calls": self.audit_planner_query_calls,
+            "proposal_cache_entry_count": len(self._proposal_cache),
             "winner_cache_entry_count": len(self._proposal_cache),
+            "peak_proposal_cache_entries": self.peak_proposal_cache_entries,
+            "peak_cached_estimate_entries": self.peak_cached_estimate_entries,
+            "incumbent_estimate_count": self.incumbent_estimate_count,
         }
 
 
@@ -398,7 +471,12 @@ def search_postgres_greedy_add(
             clock=clock,
         )
     evaluator = IncrementalPostgresSearchEvaluator(
-        planner_session, snapshot, candidate_universe, plan, utility_provider
+        planner_session,
+        snapshot,
+        candidate_universe,
+        plan,
+        utility_provider,
+        expected_baseline_objective=singleton_profile.baseline.objective,
     )
     return greedy_add_search_incremental(
         singleton_profile,
@@ -416,6 +494,7 @@ def search_postgres_greedy_add(
         runtime_metadata_provider=evaluator.runtime_metadata,
         prepare_initial_configuration=evaluator.prepare_initial_configuration,
         commit_configuration=evaluator.commit_configuration,
+        discard_proposals=evaluator.discard_proposals,
     )
 
 

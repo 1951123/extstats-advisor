@@ -22,6 +22,7 @@ from extstats_advisor.optimization.singleton import (
 OPTIMIZATION_PLAN_FORMAT_VERSION = "optimization-plan-v1"
 OPTIMIZATION_PLAN_V2_FORMAT_VERSION = "optimization-plan-v2"
 SCREENING_POLICY = "singleton-prefix-screening-v1"
+_DEFAULT_MAX_STATISTICS_COUNT = object()
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -295,14 +296,25 @@ def create_optimization_plan(
     singleton_profile: SingletonProfile,
     *,
     candidate_limit: int,
-    max_statistics_count: int | None = None,
+    max_statistics_count: int | None | object = _DEFAULT_MAX_STATISTICS_COUNT,
     wall_clock_seconds: float = 300.0,
 ) -> OptimizationPlan:
-    """Create a pure budgeted prefix without planner or utility evaluation."""
+    """Create a pure budgeted prefix without planner or utility evaluation.
+
+    Omitting ``max_statistics_count`` creates the canonical v2 plan with
+    ``B == candidate_limit``.  Passing ``None`` explicitly retains the v1
+    reference-plan compatibility path; loading an existing v1 artifact never
+    rewrites it.
+    """
 
     if not isinstance(singleton_profile, SingletonProfile):
         raise OptimizationPlanningError("singleton_profile must be a SingletonProfile")
-    budget = OptimizationBudget(candidate_limit, wall_clock_seconds, max_statistics_count)
+    resolved_max_statistics_count = (
+        candidate_limit
+        if max_statistics_count is _DEFAULT_MAX_STATISTICS_COUNT
+        else max_statistics_count
+    )
+    budget = OptimizationBudget(candidate_limit, wall_clock_seconds, resolved_max_statistics_count)
     actionable = tuple(singleton_profile.frozen_ordered_candidate_ids)
     limit = min(budget.candidate_limit, len(actionable))
     screened_ids = actionable[:limit]
