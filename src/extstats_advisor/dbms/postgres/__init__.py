@@ -46,12 +46,18 @@ from extstats_advisor.dbms.postgres.sandbox import (
     prepare_postgres_planner_sandbox,
     verify_postgres_planner_sandbox,
 )
-from extstats_advisor.dbms.postgres.search import search_postgres_greedy_add
+from extstats_advisor.dbms.postgres.search import (
+    IncrementalPostgresSearchEvaluator,
+    PostgresSearchEvaluator,
+    search_postgres_greedy_add,
+    search_postgres_greedy_add_reference,
+)
 
 __all__ = [
     "DEFAULT_LOCK_TIMEOUT_MS",
     "DEFAULT_STATEMENT_TIMEOUT_MS",
     "POSTGRES_PLANNER_SANDBOX_CONTRACT",
+    "IncrementalPostgresSearchEvaluator",
     "InvalidPopulationEstimateError",
     "PlannerEstimate",
     "PostgresAcquisitionError",
@@ -59,6 +65,7 @@ __all__ = [
     "PostgresPermissionError",
     "PostgresPlannerSession",
     "PostgresSandboxMetadata",
+    "PostgresSearchEvaluator",
     "PostgresSnapshotAcquirer",
     "PostgresStatisticsConfiguration",
     "PreparedPostgresPlannerSandbox",
@@ -80,5 +87,6 @@ __all__ = [
     "quote_postgresql_identifier",
     "render_postgres_sql",
     "search_postgres_greedy_add",
+    "search_postgres_greedy_add_reference",
     "verify_postgres_planner_sandbox",
 ]

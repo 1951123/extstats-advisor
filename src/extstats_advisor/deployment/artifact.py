@@ -349,6 +349,8 @@ def deployment_result_summary(result: DeploymentResult) -> dict[str, Any]:
             "relation_oid": result.target_relation_oid,
         },
         "deployment_ordered_candidate_ids": list(result.deployment_ordered_candidate_ids),
+        "selected_candidate_count": len(result.deployment_ordered_candidate_ids),
+        "physical_statistics_object_count": len(result.deployed_objects),
         "deployed_object_count": len(result.deployed_objects),
         "commit_status": result.commit_status,
         "post_commit_verified": result.post_commit_verified,

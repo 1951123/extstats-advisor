@@ -20,6 +20,7 @@ from extstats_advisor.optimization.singleton import (
 )
 
 OPTIMIZATION_PLAN_FORMAT_VERSION = "optimization-plan-v1"
+OPTIMIZATION_PLAN_V2_FORMAT_VERSION = "optimization-plan-v2"
 SCREENING_POLICY = "singleton-prefix-screening-v1"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -195,6 +196,12 @@ class OptimizationPlan:
         return self.budget.contract
 
     @property
+    def max_statistics_count(self) -> int:
+        """Maximum selected candidate definitions, defaulting to the v1 limit."""
+
+        return self.budget.effective_max_statistics_count
+
+    @property
     def excluded_actionable_candidate_count(self) -> int:
         return len(self.excluded_actionable_candidate_ids)
 
@@ -243,7 +250,11 @@ class OptimizationPlan:
 
     def semantic_manifest(self) -> dict[str, Any]:
         return {
-            "format_version": OPTIMIZATION_PLAN_FORMAT_VERSION,
+            "format_version": (
+                OPTIMIZATION_PLAN_FORMAT_VERSION
+                if self.budget.max_statistics_count is None
+                else OPTIMIZATION_PLAN_V2_FORMAT_VERSION
+            ),
             "source_snapshot_semantic_digest": self.source_snapshot_semantic_digest,
             "candidate_universe_semantic_digest": self.candidate_universe_semantic_digest,
             "native_stats_repository_semantic_digest": self.native_stats_repository_semantic_digest,
@@ -284,13 +295,14 @@ def create_optimization_plan(
     singleton_profile: SingletonProfile,
     *,
     candidate_limit: int,
+    max_statistics_count: int | None = None,
     wall_clock_seconds: float = 300.0,
 ) -> OptimizationPlan:
     """Create a pure budgeted prefix without planner or utility evaluation."""
 
     if not isinstance(singleton_profile, SingletonProfile):
         raise OptimizationPlanningError("singleton_profile must be a SingletonProfile")
-    budget = OptimizationBudget(candidate_limit, wall_clock_seconds)
+    budget = OptimizationBudget(candidate_limit, wall_clock_seconds, max_statistics_count)
     actionable = tuple(singleton_profile.frozen_ordered_candidate_ids)
     limit = min(budget.candidate_limit, len(actionable))
     screened_ids = actionable[:limit]

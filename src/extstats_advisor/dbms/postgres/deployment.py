@@ -332,6 +332,10 @@ def _preflight_locked(
             f"{item['schema']}.{item['name']}" for item in external
         ],
         "deterministic_name_collisions": [],
+        "selected_candidate_count": len(recommendation.selected_candidate_ids),
+        "physical_statistics_object_count": sum(
+            item.action_type == "create-statistics" for item in recommendation.ddl_plan
+        ),
         "recommended_object_count": len(recommendation.selected_candidates),
     }
 
@@ -513,6 +517,8 @@ def _no_change_result(
             "status": "not-run",
             "reason": "no-change Recommendation; no production connection opened",
             "deployment_policy": DEPLOYMENT_POLICY,
+            "selected_candidate_count": 0,
+            "physical_statistics_object_count": 0,
         },
         "not-required",
         True,
@@ -645,6 +651,8 @@ def deploy_postgres_recommendation(
         {
             "lock_timeout_ms": lock_timeout_ms,
             "statement_timeout_ms": statement_timeout_ms,
+            "selected_candidate_count": len(recommendation.selected_candidate_ids),
+            "physical_statistics_object_count": len(deployed_objects),
         },
     )
 

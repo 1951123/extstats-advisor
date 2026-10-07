@@ -13,6 +13,7 @@ from extstats_advisor.optimization.budget import (
 )
 from extstats_advisor.optimization.plan import (
     OPTIMIZATION_PLAN_FORMAT_VERSION,
+    OPTIMIZATION_PLAN_V2_FORMAT_VERSION,
     SCREENING_POLICY,
     OptimizationPlan,
     ScreenedCandidate,
@@ -26,10 +27,14 @@ from extstats_advisor.optimization.plan_artifact import (
 )
 from extstats_advisor.optimization.search import (
     GREEDY_ADD_SEARCH_POLICY,
+    INCREMENTAL_GREEDY_ADD_SEARCH_POLICY,
+    SEARCH_RESULT_FORMAT_VERSION,
+    SEARCH_RESULT_V2_FORMAT_VERSION,
     TERMINATION_ALL_SELECTED,
     TERMINATION_BUDGET_BEFORE_ROUND,
     TERMINATION_BUDGET_INCOMPLETE_ROUND,
     TERMINATION_LOCAL_OPTIMUM,
+    TERMINATION_MAX_STATISTICS_COUNT,
     AcceptedMove,
     CompletedSearchRound,
     PlannerIdentity,
@@ -37,6 +42,7 @@ from extstats_advisor.optimization.search import (
     SearchEvaluation,
     SearchResult,
     greedy_add_search,
+    greedy_add_search_incremental,
 )
 from extstats_advisor.optimization.search_artifact import (
     inspect_search_result,
@@ -58,15 +64,20 @@ from extstats_advisor.optimization.singleton import (
 __all__ = [
     "DEFAULT_WALL_CLOCK_SECONDS",
     "GREEDY_ADD_SEARCH_POLICY",
+    "INCREMENTAL_GREEDY_ADD_SEARCH_POLICY",
     "OPTIMIZATION_BUDGET_CONTRACT",
     "OPTIMIZATION_PLAN_FORMAT_VERSION",
+    "OPTIMIZATION_PLAN_V2_FORMAT_VERSION",
     "SCREENING_POLICY",
+    "SEARCH_RESULT_FORMAT_VERSION",
+    "SEARCH_RESULT_V2_FORMAT_VERSION",
     "SINGLETON_PRECEDENCE_POLICY",
     "SINGLETON_PROFILE_FORMAT_VERSION",
     "TERMINATION_ALL_SELECTED",
     "TERMINATION_BUDGET_BEFORE_ROUND",
     "TERMINATION_BUDGET_INCOMPLETE_ROUND",
     "TERMINATION_LOCAL_OPTIMUM",
+    "TERMINATION_MAX_STATISTICS_COUNT",
     "AcceptedMove",
     "BaselineProfile",
     "CandidateSingletonProfile",
@@ -81,6 +92,7 @@ __all__ = [
     "SingletonProfile",
     "create_optimization_plan",
     "greedy_add_search",
+    "greedy_add_search_incremental",
     "inspect_optimization_plan",
     "inspect_search_result",
     "inspect_singleton_profile",

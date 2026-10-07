@@ -333,6 +333,9 @@ def recommendation_summary(recommendation: Recommendation) -> dict[str, Any]:
         "final_objective": recommendation.final_objective,
         "improvement": recommendation.improvement,
         "selected_candidate_count": len(recommendation.selected_candidate_ids),
+        "physical_statistics_object_count": sum(
+            isinstance(action, CreateStatisticsAction) for action in recommendation.ddl_plan
+        ),
         "selected_candidate_ids": list(recommendation.selected_candidate_ids),
         "deployment_ordered_candidate_ids": list(recommendation.deployment_ordered_candidate_ids),
         "target_catalog": recommendation.target_relation.catalog,

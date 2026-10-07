@@ -20,10 +20,13 @@ from extstats_advisor.native_stats.repository import validate_native_stats_repos
 from extstats_advisor.optimization.budget import OPTIMIZATION_BUDGET_CONTRACT, OptimizationBudget
 from extstats_advisor.optimization.plan import OptimizationPlan
 from extstats_advisor.optimization.search import (
+    SEARCH_RESULT_FORMAT_VERSION,
+    SEARCH_RESULT_V2_FORMAT_VERSION,
     TERMINATION_ALL_SELECTED,
     TERMINATION_BUDGET_BEFORE_ROUND,
     TERMINATION_BUDGET_INCOMPLETE_ROUND,
     TERMINATION_LOCAL_OPTIMUM,
+    TERMINATION_MAX_STATISTICS_COUNT,
     AcceptedMove,
     CompletedSearchRound,
     PlannerIdentity,
@@ -76,7 +79,8 @@ def _from_manifest(value: dict[str, Any]) -> SearchResult:
     unknown = set(value) - _TOP_LEVEL_FIELDS
     if unknown:
         raise SearchResultValidationError("search result contains unknown fields")
-    if value.get("format_version") != "optimization-search-result-v1":
+    format_version = value.get("format_version")
+    if format_version not in {SEARCH_RESULT_FORMAT_VERSION, SEARCH_RESULT_V2_FORMAT_VERSION}:
         raise SearchResultValidationError("unknown search result format")
     planner = value.get("planner")
     utility = value.get("utility")
@@ -91,11 +95,10 @@ def _from_manifest(value: dict[str, Any]) -> SearchResult:
         raise SearchResultValidationError("search planner manifest is invalid")
     if not isinstance(utility, dict) or set(utility) != {"utility_contract", "loss_contract"}:
         raise SearchResultValidationError("search utility manifest is invalid")
-    if not isinstance(budget, dict) or set(budget) != {
-        "contract",
-        "candidate_limit",
-        "wall_clock_seconds",
-    }:
+    expected_budget_fields = {"contract", "candidate_limit", "wall_clock_seconds"}
+    if format_version == SEARCH_RESULT_V2_FORMAT_VERSION:
+        expected_budget_fields.add("max_statistics_count")
+    if not isinstance(budget, dict) or set(budget) != expected_budget_fields:
         raise SearchResultValidationError("search budget manifest is invalid")
     if budget["contract"] != OPTIMIZATION_BUDGET_CONTRACT:
         raise SearchResultValidationError("unsupported search budget contract")
@@ -180,7 +183,11 @@ def _from_manifest(value: dict[str, Any]) -> SearchResult:
             value["search_policy"],
             utility["utility_contract"],
             utility["loss_contract"],
-            OptimizationBudget(budget["candidate_limit"], budget["wall_clock_seconds"]),
+            OptimizationBudget(
+                budget["candidate_limit"],
+                budget["wall_clock_seconds"],
+                budget.get("max_statistics_count"),
+            ),
             value["baseline_objective"],
             value["final_objective"],
             value["improvement"],
@@ -192,6 +199,7 @@ def _from_manifest(value: dict[str, Any]) -> SearchResult:
             value.get("runtime_metadata", {}),
             value.get("created_at"),
             value.get("semantic_digest"),
+            format_version=format_version,
         )
     except (
         KeyError,
@@ -250,6 +258,13 @@ def _validate_bindings(
     if optimization_plan is not None:
         if result.optimization_plan_semantic_digest != optimization_plan.computed_semantic_digest:
             raise SearchResultValidationError("search optimization plan digest mismatch")
+        expected_format = (
+            SEARCH_RESULT_FORMAT_VERSION
+            if optimization_plan.budget.max_statistics_count is None
+            else SEARCH_RESULT_V2_FORMAT_VERSION
+        )
+        if result.format_version != expected_format:
+            raise SearchResultValidationError("search result format does not match plan version")
         if result.budget != optimization_plan.budget:
             raise SearchResultValidationError("search budget mismatch")
         if result.utility_contract != optimization_plan.utility_contract:
@@ -387,6 +402,17 @@ def _validate_search_history(
             raise SearchResultValidationError(
                 "all-selected termination has partial round diagnostics"
             )
+    elif result.termination_reason == TERMINATION_MAX_STATISTICS_COUNT:
+        if len(current_membership) != plan.max_statistics_count:
+            raise SearchResultValidationError("max-statistics termination is incomplete")
+        if plan.max_statistics_count >= plan.screened_candidate_count:
+            raise SearchResultValidationError(
+                "max-statistics termination is not distinct from all-selected"
+            )
+        if partial_count not in (None, 0):
+            raise SearchResultValidationError(
+                "max-statistics termination has partial round diagnostics"
+            )
     elif result.termination_reason == TERMINATION_BUDGET_BEFORE_ROUND:
         if partial_count not in (None, 0):
             raise SearchResultValidationError("before-round expiry has partial evaluations")
@@ -447,7 +473,7 @@ def write_search_result(result: SearchResult, destination: Path) -> str:
 
 def search_result_summary(result: SearchResult) -> dict[str, Any]:
     return {
-        "format_version": "optimization-search-result-v1",
+        "format_version": result.format_version,
         "semantic_digest": result.computed_semantic_digest,
         "search_policy": result.search_policy,
         "termination_reason": result.termination_reason,
@@ -461,6 +487,7 @@ def search_result_summary(result: SearchResult) -> dict[str, Any]:
         "accepted_move_count": len(result.accepted_moves),
         "budget_contract": OPTIMIZATION_BUDGET_CONTRACT,
         "candidate_limit": result.budget.candidate_limit,
+        "max_statistics_count": result.budget.max_statistics_count,
         "wall_clock_seconds": result.budget.wall_clock_seconds,
         "utility_contract": result.utility_contract,
         "loss_contract": result.loss_contract,

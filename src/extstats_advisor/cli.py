@@ -199,6 +199,11 @@ def _parser() -> argparse.ArgumentParser:
     plan.add_argument("ground_truth", type=Path)
     plan.add_argument("singleton_profile", type=Path)
     plan.add_argument("--candidate-limit", required=True, type=int)
+    plan.add_argument(
+        "--max-statistics-count",
+        type=int,
+        help="maximum selected candidate definitions B (defaults to candidate-limit)",
+    )
     plan.add_argument("--wall-clock-seconds", default=300.0, type=float)
     plan.add_argument("--output", required=True, type=Path)
     validate_plan = optimization_commands.add_parser("validate")
@@ -857,6 +862,11 @@ def main(argv: list[str] | None = None) -> int:
             plan = create_optimization_plan(
                 singleton_profile,
                 candidate_limit=args.candidate_limit,
+                max_statistics_count=(
+                    args.max_statistics_count
+                    if args.max_statistics_count is not None
+                    else args.candidate_limit
+                ),
                 wall_clock_seconds=args.wall_clock_seconds,
             )
             digest = write_optimization_plan(plan, args.output)

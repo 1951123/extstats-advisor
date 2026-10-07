@@ -23,6 +23,7 @@ from extstats_advisor.optimization.budget import (
 )
 from extstats_advisor.optimization.plan import (
     OPTIMIZATION_PLAN_FORMAT_VERSION,
+    OPTIMIZATION_PLAN_V2_FORMAT_VERSION,
     OptimizationPlan,
     ScreenedCandidate,
 )
@@ -68,7 +69,11 @@ def _from_manifest(value: dict[str, Any]) -> OptimizationPlan:
     unknown = set(value) - _TOP_LEVEL_FIELDS
     if unknown:
         raise OptimizationPlanValidationError("optimization plan contains unknown fields")
-    if value.get("format_version") != OPTIMIZATION_PLAN_FORMAT_VERSION:
+    format_version = value.get("format_version")
+    if format_version not in {
+        OPTIMIZATION_PLAN_FORMAT_VERSION,
+        OPTIMIZATION_PLAN_V2_FORMAT_VERSION,
+    }:
         raise OptimizationPlanValidationError("unknown optimization plan format")
     utility = value.get("utility")
     precedence = value.get("precedence")
@@ -79,10 +84,15 @@ def _from_manifest(value: dict[str, Any]) -> OptimizationPlan:
         ("utility", utility, {"utility_contract", "loss_contract"}),
         ("precedence", precedence, {"policy"}),
         ("screening", screening, {"policy"}),
-        ("budget", budget, {"contract", "candidate_limit", "wall_clock_seconds"}),
+        ("budget", budget, None),
     ):
-        if not isinstance(section, dict) or set(section) != fields:
+        if not isinstance(section, dict) or (fields is not None and set(section) != fields):
             raise OptimizationPlanValidationError(f"optimization {label} section is invalid")
+    expected_budget_fields = {"contract", "candidate_limit", "wall_clock_seconds"}
+    if format_version == OPTIMIZATION_PLAN_V2_FORMAT_VERSION:
+        expected_budget_fields.add("max_statistics_count")
+    if set(budget) != expected_budget_fields:
+        raise OptimizationPlanValidationError("optimization budget section is invalid")
     if budget["contract"] != OPTIMIZATION_BUDGET_CONTRACT:
         raise OptimizationPlanValidationError("unsupported optimization budget contract")
     for label in (
@@ -129,7 +139,11 @@ def _from_manifest(value: dict[str, Any]) -> OptimizationPlan:
             utility["loss_contract"],
             precedence["policy"],
             screening["policy"],
-            OptimizationBudget(budget["candidate_limit"], budget["wall_clock_seconds"]),
+            OptimizationBudget(
+                budget["candidate_limit"],
+                budget["wall_clock_seconds"],
+                budget.get("max_statistics_count"),
+            ),
             value["actionable_candidate_count"],
             tuple(value["screened_candidate_ids"]),
             tuple(screened_candidates),
@@ -342,10 +356,15 @@ def optimization_plan_summary(plan: OptimizationPlan) -> dict[str, Any]:
         default=None,
     )
     return {
-        "format_version": OPTIMIZATION_PLAN_FORMAT_VERSION,
+        "format_version": (
+            OPTIMIZATION_PLAN_FORMAT_VERSION
+            if plan.budget.max_statistics_count is None
+            else OPTIMIZATION_PLAN_V2_FORMAT_VERSION
+        ),
         "semantic_digest": plan.computed_semantic_digest,
         "budget_contract": OPTIMIZATION_BUDGET_CONTRACT,
         "candidate_limit": plan.budget.candidate_limit,
+        "max_statistics_count": plan.max_statistics_count,
         "wall_clock_seconds": plan.budget.wall_clock_seconds,
         "screening_policy": plan.screening_policy,
         "precedence_policy": plan.precedence_policy,

@@ -21,17 +21,21 @@ from extstats_advisor.optimization.singleton import SingletonProfile
 from extstats_advisor.utility.model import UtilityResult
 
 SEARCH_RESULT_FORMAT_VERSION = "optimization-search-result-v1"
+SEARCH_RESULT_V2_FORMAT_VERSION = "optimization-search-result-v2"
 GREEDY_ADD_SEARCH_POLICY = "greedy-add-strict-improvement-v1"
+INCREMENTAL_GREEDY_ADD_SEARCH_POLICY = "greedy-add-incidence-incremental-v1"
 TERMINATION_LOCAL_OPTIMUM = "local-optimum"
 TERMINATION_ALL_SELECTED = "all-screened-candidates-selected"
 TERMINATION_BUDGET_BEFORE_ROUND = "budget-expired-before-round"
 TERMINATION_BUDGET_INCOMPLETE_ROUND = "budget-expired-incomplete-round"
+TERMINATION_MAX_STATISTICS_COUNT = "max-statistics-count"
 TERMINATION_REASONS = frozenset(
     {
         TERMINATION_LOCAL_OPTIMUM,
         TERMINATION_ALL_SELECTED,
         TERMINATION_BUDGET_BEFORE_ROUND,
         TERMINATION_BUDGET_INCOMPLETE_ROUND,
+        TERMINATION_MAX_STATISTICS_COUNT,
     }
 )
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -254,6 +258,7 @@ class SearchResult:
     runtime_metadata: Mapping[str, Any] = field(default_factory=dict, repr=False, compare=False)
     created_at: str | None = field(default=None, repr=False, compare=False)
     semantic_digest: str | None = field(default=None, repr=False, compare=False)
+    format_version: str = field(default=SEARCH_RESULT_FORMAT_VERSION, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         for label, value in (
@@ -267,8 +272,16 @@ class SearchResult:
             _digest(value, label)
         if not isinstance(self.planner_identity, PlannerIdentity):
             raise SearchResultValidationError("planner identity is invalid")
-        if self.search_policy != GREEDY_ADD_SEARCH_POLICY:
+        if self.search_policy not in {
+            GREEDY_ADD_SEARCH_POLICY,
+            INCREMENTAL_GREEDY_ADD_SEARCH_POLICY,
+        }:
             raise SearchResultValidationError("unsupported search policy")
+        if self.format_version not in {
+            SEARCH_RESULT_FORMAT_VERSION,
+            SEARCH_RESULT_V2_FORMAT_VERSION,
+        }:
+            raise SearchResultValidationError("unsupported search result format")
         _token(self.utility_contract, "utility contract")
         _token(self.loss_contract, "loss contract")
         if not isinstance(self.budget, OptimizationBudget):
@@ -331,7 +344,7 @@ class SearchResult:
 
     def semantic_manifest(self) -> dict[str, Any]:
         return {
-            "format_version": SEARCH_RESULT_FORMAT_VERSION,
+            "format_version": self.format_version,
             "source_snapshot_semantic_digest": self.source_snapshot_semantic_digest,
             "candidate_universe_semantic_digest": self.candidate_universe_semantic_digest,
             "native_stats_repository_semantic_digest": self.native_stats_repository_semantic_digest,
@@ -587,3 +600,226 @@ def greedy_add_search(
         current_objective = best.objective
         if len(current_membership) == len(screened):
             return finish(TERMINATION_ALL_SELECTED)
+
+
+ConfigurationPreparation = Callable[[frozenset[str], SearchDeadline], None]
+ConfigurationCommit = Callable[[frozenset[str]], None]
+
+
+def greedy_add_search_incremental(
+    singleton_profile: SingletonProfile,
+    plan: OptimizationPlan,
+    utility_provider: Any,
+    evaluate_configuration: ConfigurationEvaluator,
+    planner_identity: PlannerIdentity,
+    *,
+    clock: Callable[[], float] | MonotonicClock = time.monotonic,
+    runtime_metadata_provider: RuntimeMetadataProvider | None = None,
+    prepare_initial_configuration: ConfigurationPreparation | None = None,
+    commit_configuration: ConfigurationCommit | None = None,
+) -> SearchResult:
+    """Run v2 Greedy ADD over an exact incremental configuration evaluator.
+
+    The evaluator owns estimate caches.  The search driver only commits a
+    proposal after its complete round has been evaluated, so a proposal that
+    is later rejected (or a round that is cut short by the deadline) cannot
+    mutate the incumbent cache.
+    """
+
+    if plan.budget.max_statistics_count is None:
+        raise SearchError("incremental search requires an explicit v2 max_statistics_count")
+    utility_contract, loss_contract = _validate_search_inputs(
+        singleton_profile, plan, utility_provider
+    )
+    deadline = SearchDeadline(plan.budget, clock)
+    screened = plan.screened_candidate_ids
+    maximum = plan.max_statistics_count
+    first_round = tuple(
+        SearchEvaluation(
+            record.candidate_id,
+            plan.ordered_configuration((record.candidate_id,)),
+            record.singleton_objective,
+        )
+        for record in plan.screened_candidates
+    )
+    live_configuration_evaluation_count = 0
+    partial_final_round_evaluation_count = 0
+    completed_rounds: list[CompletedSearchRound] = []
+    accepted_moves: list[AcceptedMove] = []
+    current_membership: set[str] = set()
+    current_objective = singleton_profile.baseline.objective
+
+    def finish(termination_reason: str) -> SearchResult:
+        runtime = {
+            "evaluation_strategy": "incidence-incremental-greedy-v1",
+            "cached_singleton_configuration_count": len(screened),
+            "live_configuration_evaluation_count": live_configuration_evaluation_count,
+            "proposal_configuration_evaluations": live_configuration_evaluation_count,
+            "planner_query_estimate_count": None,
+            "proposal_planner_query_calls": None,
+            "reference_full_workload_planner_calls": None,
+            "saved_planner_query_calls": None,
+            "planner_query_reduction_fraction": None,
+            "completed_round_count": len(completed_rounds),
+            "accepted_move_count": len(accepted_moves),
+            "partial_final_round_evaluation_count": partial_final_round_evaluation_count,
+            "selected_candidate_count": len(current_membership),
+            "max_statistics_count": maximum,
+            "screening_width": len(screened),
+            "search_wall_clock_seconds": plan.budget.wall_clock_seconds,
+            "termination_reason": termination_reason,
+            "elapsed_search_seconds": max(0.0, deadline.now() - deadline.started_at),
+        }
+        if runtime_metadata_provider is not None:
+            runtime.update(runtime_metadata_provider())
+        return SearchResult(
+            singleton_profile.source_snapshot_semantic_digest,
+            singleton_profile.candidate_universe_semantic_digest,
+            singleton_profile.native_stats_repository_semantic_digest,
+            singleton_profile.ground_truth_semantic_digest,
+            singleton_profile.computed_semantic_digest,
+            plan.computed_semantic_digest,
+            planner_identity,
+            INCREMENTAL_GREEDY_ADD_SEARCH_POLICY,
+            utility_contract,
+            loss_contract,
+            plan.budget,
+            singleton_profile.baseline.objective,
+            current_objective,
+            singleton_profile.baseline.objective - current_objective,
+            plan.ordered_configuration(current_membership),
+            termination_reason,
+            first_round,
+            tuple(completed_rounds),
+            tuple(accepted_moves),
+            runtime,
+            None,
+            None,
+            SEARCH_RESULT_V2_FORMAT_VERSION,
+        )
+
+    def finish_after_acceptance() -> SearchResult | None:
+        if len(current_membership) == maximum:
+            # Preserve the old vocabulary when B == K_s and the entire
+            # screened prefix has been selected.
+            if maximum == len(screened):
+                return finish(TERMINATION_ALL_SELECTED)
+            return finish(TERMINATION_MAX_STATISTICS_COUNT)
+        if len(current_membership) == len(screened):
+            return finish(TERMINATION_ALL_SELECTED)
+        return None
+
+    if not screened:
+        return finish(TERMINATION_LOCAL_OPTIMUM)
+    try:
+        deadline.ensure_available()
+    except SearchBudgetExpired:
+        return finish(TERMINATION_BUDGET_BEFORE_ROUND)
+    best_singleton = min(
+        enumerate(plan.screened_candidates),
+        key=lambda item: (item[1].singleton_objective, item[0]),
+    )[1]
+    try:
+        deadline.ensure_available()
+    except SearchBudgetExpired:
+        return finish(TERMINATION_BUDGET_BEFORE_ROUND)
+    if best_singleton.singleton_objective >= current_objective:
+        return finish(TERMINATION_LOCAL_OPTIMUM)
+    try:
+        deadline.ensure_available()
+    except SearchBudgetExpired:
+        return finish(TERMINATION_BUDGET_BEFORE_ROUND)
+
+    current_membership.add(best_singleton.candidate_id)
+    accepted_moves.append(
+        AcceptedMove(
+            1,
+            best_singleton.candidate_id,
+            current_objective,
+            best_singleton.singleton_objective,
+            current_objective - best_singleton.singleton_objective,
+            plan.ordered_configuration(current_membership),
+        )
+    )
+    current_objective = best_singleton.singleton_objective
+    if prepare_initial_configuration is not None:
+        try:
+            prepare_initial_configuration(frozenset(current_membership), deadline)
+        except SearchBudgetExpired:
+            return finish(TERMINATION_BUDGET_BEFORE_ROUND)
+    terminal = finish_after_acceptance()
+    if terminal is not None:
+        return terminal
+
+    while True:
+        if len(current_membership) == maximum:
+            return finish(
+                TERMINATION_ALL_SELECTED
+                if maximum == len(screened)
+                else TERMINATION_MAX_STATISTICS_COUNT
+            )
+        remaining = tuple(
+            candidate_id for candidate_id in screened if candidate_id not in current_membership
+        )
+        if not remaining:
+            return finish(TERMINATION_ALL_SELECTED)
+        evaluations: list[SearchEvaluation] = []
+        round_evaluation_attempted = False
+        for candidate_id in remaining:
+            attempted_configuration = False
+            try:
+                deadline.ensure_available()
+                proposed_membership = frozenset((*current_membership, candidate_id))
+                attempted_configuration = True
+                round_evaluation_attempted = True
+                live_configuration_evaluation_count += 1
+                result = evaluate_configuration(proposed_membership, deadline)
+                if result.loss_contract != loss_contract:
+                    raise SearchError("utility result loss contract changed during search")
+                deadline.ensure_available()
+            except SearchBudgetExpired:
+                partial_final_round_evaluation_count = len(evaluations) + int(
+                    attempted_configuration
+                )
+                return finish(
+                    TERMINATION_BUDGET_INCOMPLETE_ROUND
+                    if round_evaluation_attempted
+                    else TERMINATION_BUDGET_BEFORE_ROUND
+                )
+            evaluations.append(
+                SearchEvaluation(
+                    candidate_id,
+                    plan.ordered_configuration(proposed_membership),
+                    result.objective,
+                )
+            )
+        try:
+            deadline.ensure_available()
+        except SearchBudgetExpired:
+            partial_final_round_evaluation_count = len(evaluations)
+            return finish(TERMINATION_BUDGET_INCOMPLETE_ROUND)
+        completed_rounds.append(CompletedSearchRound(len(completed_rounds) + 2, tuple(evaluations)))
+        best = min(
+            enumerate(evaluations),
+            key=lambda item: (item[1].objective, item[0]),
+        )[1]
+        if best.objective >= current_objective:
+            return finish(TERMINATION_LOCAL_OPTIMUM)
+        proposed_membership = frozenset((*current_membership, best.candidate_id))
+        if commit_configuration is not None:
+            commit_configuration(proposed_membership)
+        current_membership.add(best.candidate_id)
+        accepted_moves.append(
+            AcceptedMove(
+                len(accepted_moves) + 1,
+                best.candidate_id,
+                current_objective,
+                best.objective,
+                current_objective - best.objective,
+                best.ordered_candidate_ids,
+            )
+        )
+        current_objective = best.objective
+        terminal = finish_after_acceptance()
+        if terminal is not None:
+            return terminal
