@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from extstats_advisor.dbms.postgres.planner import (
@@ -46,6 +46,7 @@ class PostgresSearchEvaluator:
         candidate_universe: Any,
         plan: OptimizationPlan,
         utility_provider: Any,
+        query_ids: Sequence[str] | None = None,
     ) -> None:
         self._session = planner_session
         self._snapshot = snapshot
@@ -53,8 +54,17 @@ class PostgresSearchEvaluator:
         self._plan = plan
         self._utility = utility_provider
         profiles = {profile.query_id: profile for profile in candidate_universe.query_profiles}
+        workload_by_id = {query.query_id: query for query in snapshot.workload.queries}
+        requested_query_ids = (
+            tuple(query.query_id for query in snapshot.workload.queries)
+            if query_ids is None
+            else tuple(query_ids)
+        )
         self._query_ids = []
-        for query in snapshot.workload.queries:
+        for query_id in requested_query_ids:
+            query = workload_by_id.get(query_id)
+            if query is None:
+                raise SearchError(f"search query {query_id!r} is absent from snapshot")
             if query.weight <= 0:
                 continue
             profile = profiles.get(query.query_id)
@@ -127,6 +137,7 @@ class IncrementalPostgresSearchEvaluator:
         candidate_universe: Any,
         plan: OptimizationPlan,
         utility_provider: Any,
+        query_ids: Sequence[str] | None = None,
     ) -> None:
         self._session = planner_session
         self._snapshot = snapshot
@@ -134,8 +145,17 @@ class IncrementalPostgresSearchEvaluator:
         self._plan = plan
         self._utility = utility_provider
         profiles = {profile.query_id: profile for profile in candidate_universe.query_profiles}
+        workload_by_id = {query.query_id: query for query in snapshot.workload.queries}
+        requested_query_ids = (
+            tuple(query.query_id for query in snapshot.workload.queries)
+            if query_ids is None
+            else tuple(query_ids)
+        )
         self._query_ids = []
-        for query in snapshot.workload.queries:
+        for query_id in requested_query_ids:
+            query = workload_by_id.get(query_id)
+            if query is None:
+                raise SearchError(f"search query {query_id!r} is absent from snapshot")
             if query.weight <= 0:
                 continue
             profile = profiles.get(query.query_id)
