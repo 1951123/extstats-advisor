@@ -357,9 +357,15 @@ def test_patched_planner_sandbox_is_catalogless_ordered_and_isolated(
     )
     assert all(move.objective_after < move.objective_before for move in first_result.accepted_moves)
     assert first_result.runtime_metadata["cached_singleton_configuration_count"] == 5
+    runtime = first_result.runtime_metadata
     assert (
-        first_result.runtime_metadata["planner_query_estimate_count"]
-        == (first_result.runtime_metadata["live_configuration_evaluation_count"])
+        runtime["proposal_configuration_evaluations"]
+        == runtime["live_configuration_evaluation_count"]
+    )
+    assert runtime["planner_query_estimate_count"] == (
+        runtime["baseline_materialization_planner_calls"]
+        + runtime["winner_materialization_planner_calls"]
+        + runtime["proposal_planner_query_calls"]
     )
     best_singleton = min(
         first_profile.candidate_profiles,
