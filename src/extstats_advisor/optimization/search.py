@@ -452,6 +452,11 @@ def greedy_add_search(
     )
     deadline = SearchDeadline(plan.budget, clock)
     screened = plan.screened_candidate_ids
+    maximum = (
+        plan.budget.max_statistics_count
+        if plan.budget.max_statistics_count is not None
+        else len(screened)
+    )
     first_round = tuple(
         SearchEvaluation(
             record.candidate_id,
@@ -477,6 +482,7 @@ def greedy_add_search(
             "partial_final_round_evaluation_count": partial_final_round_evaluation_count,
             "termination_reason": termination_reason,
             "elapsed_search_seconds": max(0.0, deadline.now() - deadline.started_at),
+            "max_statistics_count": plan.max_statistics_count,
         }
         if runtime_metadata_provider is not None:
             runtime.update(runtime_metadata_provider())
@@ -501,6 +507,11 @@ def greedy_add_search(
             tuple(completed_rounds),
             tuple(accepted_moves),
             runtime,
+            None,
+            None,
+            SEARCH_RESULT_V2_FORMAT_VERSION
+            if plan.budget.max_statistics_count is not None
+            else SEARCH_RESULT_FORMAT_VERSION,
         )
 
     if not screened:
@@ -535,8 +546,12 @@ def greedy_add_search(
         )
     )
     current_objective = best_singleton.singleton_objective
-    if len(current_membership) == len(screened):
-        return finish(TERMINATION_ALL_SELECTED)
+    if len(current_membership) == maximum:
+        return finish(
+            TERMINATION_ALL_SELECTED
+            if maximum == len(screened)
+            else TERMINATION_MAX_STATISTICS_COUNT
+        )
 
     while True:
         remaining = tuple(
@@ -598,8 +613,12 @@ def greedy_add_search(
             )
         )
         current_objective = best.objective
-        if len(current_membership) == len(screened):
-            return finish(TERMINATION_ALL_SELECTED)
+        if len(current_membership) == maximum:
+            return finish(
+                TERMINATION_ALL_SELECTED
+                if maximum == len(screened)
+                else TERMINATION_MAX_STATISTICS_COUNT
+            )
 
 
 ConfigurationPreparation = Callable[[frozenset[str], SearchDeadline], None]

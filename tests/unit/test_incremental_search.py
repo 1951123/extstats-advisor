@@ -127,6 +127,21 @@ def test_incremental_search_and_reference_match_completed_semantics() -> None:
     assert incremental.termination_reason == reference.termination_reason
 
 
+def test_bounded_full_workload_reference_honors_v2_budget() -> None:
+    profile = _profile()
+    plan = create_optimization_plan(profile, candidate_limit=3, max_statistics_count=1)
+    reference = greedy_add_search(
+        profile,
+        plan,
+        _Utility(),
+        lambda _membership, _deadline: _utility_result(6.0),
+        _identity(),
+    )
+    assert reference.format_version == "optimization-search-result-v2"
+    assert reference.final_ordered_candidate_ids == ("A",)
+    assert reference.termination_reason == TERMINATION_MAX_STATISTICS_COUNT
+
+
 def test_incremental_postgres_evaluator_only_replans_incident_queries() -> None:
     profile = _profile()
     plan = create_optimization_plan(profile, candidate_limit=3, max_statistics_count=3)
