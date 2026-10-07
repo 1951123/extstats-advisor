@@ -399,8 +399,10 @@ class IncrementalPostgresSearchEvaluator:
             "saved_search_planner_calls": reference - actual,
             "proposal_only_reference_planner_calls": reference,
             "proposal_only_saved_planner_calls": reference - self.proposal_planner_query_calls,
+            "proposal_only_call_reduction": reference - self.proposal_planner_query_calls,
             "end_to_end_search_planner_calls": actual,
             "end_to_end_saved_search_planner_calls": reference - actual,
+            "end_to_end_search_call_reduction": reference - actual,
             "planner_query_reduction_fraction": (
                 (reference - actual) / reference if reference else 0.0
             ),

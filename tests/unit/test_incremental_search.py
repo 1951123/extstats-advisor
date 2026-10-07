@@ -231,6 +231,8 @@ def test_incremental_postgres_evaluator_only_replans_incident_queries() -> None:
     assert runtime["actual_search_planner_calls"] == 5
     assert runtime["actual_search_planner_calls_including_audit"] == 11
     assert runtime["end_to_end_search_planner_calls"] == 5
+    assert runtime["proposal_only_call_reduction"] == 5
+    assert runtime["end_to_end_search_call_reduction"] == 1
 
 
 def test_first_winner_materialization_deadline_keeps_empty_incumbent() -> None:
