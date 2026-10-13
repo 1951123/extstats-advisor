@@ -137,6 +137,7 @@ def _parser() -> argparse.ArgumentParser:
         postgres.add_argument(
             "--dsn", default=os.environ.get("EXTSTATS_ADVISOR_PATCHED_POSTGRES_DSN")
         )
+        postgres.add_argument("--physical-database")
     destroy = sandbox_commands.add_parser("destroy")
     destroy_backend = destroy.add_subparsers(dest="sandbox_backend", required=True)
     destroy_postgres = destroy_backend.add_parser("postgres")
@@ -154,6 +155,7 @@ def _parser() -> argparse.ArgumentParser:
     estimate_postgres.add_argument(
         "--dsn", default=os.environ.get("EXTSTATS_ADVISOR_PATCHED_POSTGRES_DSN")
     )
+    estimate_postgres.add_argument("--physical-database")
     estimate_postgres.add_argument("--query-id", required=True)
     estimate_postgres.add_argument("--candidate", action="append", default=[])
     utility = commands.add_parser("utility")
@@ -168,6 +170,7 @@ def _parser() -> argparse.ArgumentParser:
     evaluate_postgres.add_argument(
         "--dsn", default=os.environ.get("EXTSTATS_ADVISOR_PATCHED_POSTGRES_DSN")
     )
+    evaluate_postgres.add_argument("--physical-database")
     evaluate_postgres.add_argument("--candidate", action="append", default=[])
     profiling = commands.add_parser("profiling")
     profiling_commands = profiling.add_subparsers(dest="profiling_command", required=True)
@@ -181,6 +184,7 @@ def _parser() -> argparse.ArgumentParser:
     singleton_postgres.add_argument(
         "--dsn", default=os.environ.get("EXTSTATS_ADVISOR_PATCHED_POSTGRES_DSN")
     )
+    singleton_postgres.add_argument("--physical-database")
     singleton_postgres.add_argument("--output", required=True, type=Path)
     validate_profile = profiling_commands.add_parser("validate")
     validate_profile.add_argument("profile", type=Path)
@@ -227,6 +231,7 @@ def _parser() -> argparse.ArgumentParser:
     search_postgres.add_argument(
         "--dsn", default=os.environ.get("EXTSTATS_ADVISOR_PATCHED_POSTGRES_DSN")
     )
+    search_postgres.add_argument("--physical-database")
     search_postgres.add_argument("--output", required=True, type=Path)
     validate_search = search_commands.add_parser("validate")
     validate_search.add_argument("search_result", type=Path)
@@ -568,7 +573,11 @@ def main(argv: list[str] | None = None) -> int:
             repository = load_native_stats_repository(args.native_repository)
             if args.sandbox_command == "prepare":
                 prepared = prepare_postgres_planner_sandbox(
-                    args.dsn, snapshot, universe, repository
+                    args.dsn,
+                    snapshot,
+                    universe,
+                    repository,
+                    physical_database=args.physical_database,
                 )
                 print(
                     json.dumps(
@@ -582,7 +591,11 @@ def main(argv: list[str] | None = None) -> int:
                         {
                             "status": "valid",
                             **verify_postgres_planner_sandbox(
-                                args.dsn, snapshot, universe, repository
+                                args.dsn,
+                                snapshot,
+                                universe,
+                                repository,
+                                physical_database=args.physical_database,
                             ),
                         },
                         sort_keys=True,
@@ -598,7 +611,13 @@ def main(argv: list[str] | None = None) -> int:
             snapshot = load_snapshot(args.snapshot)
             universe = load_candidate_universe(args.candidate_universe, snapshot)
             repository = load_native_stats_repository(args.native_repository)
-            with PostgresPlannerSession(args.dsn, snapshot, universe, repository) as session:
+            with PostgresPlannerSession(
+                args.dsn,
+                snapshot,
+                universe,
+                repository,
+                physical_database=args.physical_database,
+            ) as session:
                 configuration = PostgresStatisticsConfiguration(tuple(args.candidate))
                 session.activate(configuration)
                 result = session.estimate_query(args.query_id)
@@ -644,7 +663,13 @@ def main(argv: list[str] | None = None) -> int:
                 ArtifactGroundTruthProvider(ground_truth),
                 QErrorLoss(),
             )
-            with PostgresPlannerSession(args.dsn, snapshot, universe, repository) as session:
+            with PostgresPlannerSession(
+                args.dsn,
+                snapshot,
+                universe,
+                repository,
+                physical_database=args.physical_database,
+            ) as session:
                 profile = profile_postgres_singletons(
                     session,
                     snapshot,
@@ -809,7 +834,11 @@ def main(argv: list[str] | None = None) -> int:
                     QErrorLoss(),
                 )
                 with PostgresPlannerSession(
-                    args.dsn, snapshot, universe, repository
+                    args.dsn,
+                    snapshot,
+                    universe,
+                    repository,
+                    physical_database=args.physical_database,
                 ) as planner_session:
                     result = search_postgres_greedy_add(
                         planner_session,
@@ -902,7 +931,13 @@ def main(argv: list[str] | None = None) -> int:
                             f"positive-weight query {query.query_id!r} is outside utility scope"
                         )
                     supported_query_ids.append(query.query_id)
-            with PostgresPlannerSession(args.dsn, snapshot, universe, repository) as session:
+            with PostgresPlannerSession(
+                args.dsn,
+                snapshot,
+                universe,
+                repository,
+                physical_database=args.physical_database,
+            ) as session:
                 configuration = PostgresStatisticsConfiguration(tuple(args.candidate))
                 session.activate(configuration)
                 planner_estimates = session.estimate_queries(supported_query_ids)

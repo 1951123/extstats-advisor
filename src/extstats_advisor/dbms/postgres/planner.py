@@ -109,11 +109,14 @@ class PostgresPlannerSession:
         snapshot: AdvisorSnapshot,
         candidate_universe: CandidateUniverse,
         native_repository: NativeStatsRepository,
+        *,
+        physical_database: str | None = None,
     ) -> None:
         self._dsn = dsn
         self._snapshot = snapshot
         self._universe = candidate_universe
         self._repository = native_repository
+        self._physical_database = physical_database
         self._connection: Any = None
         self._registered = False
         self._oids: dict[str, int] = {}
@@ -191,6 +194,7 @@ class PostgresPlannerSession:
                 self._repository,
                 capabilities,
                 sql,
+                self._physical_database,
             )
             self._target_oid = target_oid
             connection.execute("SELECT pg_catalog.pg_hypothetical_extstats_reset()")

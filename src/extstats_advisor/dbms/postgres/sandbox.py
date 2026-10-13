@@ -124,6 +124,38 @@ def _frozen_relation(snapshot: AdvisorSnapshot) -> RelationName:
     )
 
 
+def _effective_database(
+    snapshot: AdvisorSnapshot,
+    physical_database: str | None,
+    error_type: type[PlannerSandboxError],
+) -> str:
+    logical_database = snapshot.schemas[0].relation_name.catalog
+    if logical_database is None:
+        raise error_type("planner sandbox requires a snapshot database/catalog name")
+    if physical_database is None:
+        return logical_database
+    if not isinstance(physical_database, str) or not physical_database.strip():
+        raise error_type("physical database binding must be a non-empty string")
+    if "\x00" in physical_database:
+        raise error_type("physical database binding contains an invalid character")
+    return physical_database
+
+
+def _verify_database_binding(
+    connection: Any,
+    snapshot: AdvisorSnapshot,
+    physical_database: str | None,
+    error_type: type[PlannerSandboxError],
+) -> str:
+    expected = _effective_database(snapshot, physical_database, error_type)
+    actual = str(connection.execute("SELECT current_database()").fetchone()[0])
+    if actual != expected:
+        raise error_type(
+            f"sandbox database {actual!r} does not match effective database binding {expected!r}"
+        )
+    return expected
+
+
 def _relation_lookup(connection: Any, relation: RelationName) -> tuple[Any, ...] | None:
     return connection.execute(
         """
@@ -400,11 +432,14 @@ def _verify_postgres_planner_sandbox_connection(
     repository: NativeStatsRepository,
     capabilities: PatchCapabilities,
     sql: Any,
+    physical_database: str | None = None,
 ) -> tuple[PostgresSandboxMetadata, int, dict[str, Any], dict[str, Any]]:
-    catalog = snapshot.schemas[0].relation_name.catalog
-    database = str(connection.execute("SELECT current_database()").fetchone()[0])
-    if catalog is None or database != catalog:
-        raise PlannerSandboxValidationError("sandbox database does not match snapshot catalog")
+    effective_database = _verify_database_binding(
+        connection,
+        snapshot,
+        physical_database,
+        PlannerSandboxValidationError,
+    )
     compatibility = validate_native_stats_repository_compatibility(repository, snapshot, universe)
     schema = snapshot.schemas[0]
     _require_sandbox_schema(schema)
@@ -494,6 +529,7 @@ def _verify_postgres_planner_sandbox_connection(
             "ordinary_stats_fingerprint": fingerprint,
             "physical_extstats_count": extstats_count,
             "autovacuum_disabled": True,
+            "physical_database": effective_database,
         },
         compatibility,
     )
@@ -520,6 +556,7 @@ def prepare_postgres_planner_sandbox(
     candidate_universe: CandidateUniverse,
     native_repository: NativeStatsRepository,
     *,
+    physical_database: str | None = None,
     batch_size: int = 256,
 ) -> PreparedPostgresPlannerSandbox:
     if len(snapshot.schemas) != 1 or len(snapshot.populations) != 1:
@@ -533,8 +570,7 @@ def prepare_postgres_planner_sandbox(
     )
     schema = snapshot.schemas[0]
     source_schema = _require_sandbox_schema(schema)
-    if schema.relation_name.catalog is None:
-        raise PlannerSandboxError("planner sandbox v1 requires a snapshot database/catalog name")
+    effective_database = _effective_database(snapshot, physical_database, PlannerSandboxError)
     table = snapshot.samples[schema.relation_id]
     if not isinstance(table, pa.Table) or table.num_rows < 1:
         raise PlannerSandboxError("planner sandbox sample is missing or empty")
@@ -553,11 +589,12 @@ def prepare_postgres_planner_sandbox(
             raise PlannerSandboxError("native repository server version mismatch")
         if native_repository.server_version != capabilities.server_version:
             raise PlannerSandboxError("native repository server version string mismatch")
-        database = str(connection.execute("SELECT current_database()").fetchone()[0])
-        if database != schema.relation_name.catalog:
-            raise PlannerSandboxError(
-                f"sandbox database {database!r} does not match snapshot catalog {schema.relation_name.catalog!r}"
-            )
+        _verify_database_binding(
+            connection,
+            snapshot,
+            effective_database,
+            PlannerSandboxError,
+        )
         sql = psycopg.sql
         connection.execute("BEGIN")
         _lock(connection)
@@ -713,6 +750,8 @@ def verify_postgres_planner_sandbox(
     snapshot: AdvisorSnapshot,
     candidate_universe: CandidateUniverse,
     native_repository: NativeStatsRepository,
+    *,
+    physical_database: str | None = None,
 ) -> dict[str, Any]:
     if len(snapshot.schemas) != 1 or len(snapshot.populations) != 1:
         raise PlannerSandboxValidationError("planner sandbox v1 requires one relation")
@@ -732,6 +771,7 @@ def verify_postgres_planner_sandbox(
             native_repository,
             capabilities,
             psycopg.sql,
+            physical_database,
         )
         return {
             "sandbox_contract": metadata.sandbox_contract,
