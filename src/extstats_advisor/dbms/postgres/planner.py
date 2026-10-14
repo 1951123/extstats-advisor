@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -55,6 +56,22 @@ class PlannerEstimate:
 
     def to_dict(self) -> dict[str, Any]:
         return {"query_id": self.query_id, "estimated_rows": self.estimated_rows}
+
+
+@dataclass(frozen=True, slots=True)
+class PrecisePlannerEstimate:
+    """Opt-in EXPLAIN estimate retaining the diagnostic floating-point value."""
+
+    query_id: str
+    estimated_rows: float
+    formatted_estimated_rows: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "query_id": self.query_id,
+            "estimated_rows": self.estimated_rows,
+            "formatted_estimated_rows": self.formatted_estimated_rows,
+        }
 
 
 def _validate_configuration(
@@ -305,7 +322,7 @@ class PostgresPlannerSession:
             )
         return query.sql
 
-    def estimate_query(self, query_id: str) -> PlannerEstimate:
+    def _plan_node(self, query_id: str) -> dict[str, Any]:
         query = self._query(query_id)
         relation = _target_relation_name(self._snapshot)
         sql = _psycopg().sql
@@ -334,16 +351,53 @@ class PostgresPlannerSession:
             raise PlannerQueryError(
                 "EXPLAIN plan does not contain exactly one managed base-relation node"
             )
+        return nodes[0]
+
+    def estimate_query(self, query_id: str) -> PlannerEstimate:
+        node = self._plan_node(query_id)
         try:
-            rows = int(nodes[0]["Plan Rows"])
+            rows = int(node["Plan Rows"])
         except (TypeError, ValueError) as exc:
             raise PlannerQueryError("managed plan node has an invalid Plan Rows value") from exc
         if rows < 0:
             raise PlannerQueryError("managed plan node has a negative Plan Rows value")
         return PlannerEstimate(query_id, rows)
 
+    def estimate_query_precise(self, query_id: str) -> PrecisePlannerEstimate:
+        """Read the opt-in diagnostic Plan Rows Exact field.
+
+        This method deliberately does not fall back to the integer Plan Rows
+        field: callers using the precision diagnostic must fail if the pinned
+        backend does not provide the diagnostic property.
+        """
+
+        node = self._plan_node(query_id)
+        if "Plan Rows Exact" not in node:
+            raise PlannerQueryError(
+                "managed plan node does not contain the diagnostic Plan Rows Exact value"
+            )
+        try:
+            precise_rows = float(node["Plan Rows Exact"])
+            formatted_rows = int(node["Plan Rows"])
+        except (TypeError, ValueError) as exc:
+            raise PlannerQueryError(
+                "managed plan node has an invalid precise Plan Rows value"
+            ) from exc
+        if not math.isfinite(precise_rows) or precise_rows < 0:
+            raise PlannerQueryError(
+                "managed plan node has a negative or non-finite precise Plan Rows value"
+            )
+        if formatted_rows < 0:
+            raise PlannerQueryError("managed plan node has a negative Plan Rows value")
+        return PrecisePlannerEstimate(query_id, precise_rows, formatted_rows)
+
     def estimate_queries(self, query_ids: Sequence[str]) -> tuple[PlannerEstimate, ...]:
         return tuple(self.estimate_query(query_id) for query_id in query_ids)
+
+    def estimate_queries_precise(
+        self, query_ids: Sequence[str]
+    ) -> tuple[PrecisePlannerEstimate, ...]:
+        return tuple(self.estimate_query_precise(query_id) for query_id in query_ids)
 
     def close(self) -> None:
         if self._connection is not None:

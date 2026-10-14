@@ -30,6 +30,7 @@ from extstats_advisor.dbms.postgres.planner import (
     PlannerEstimate,
     PostgresPlannerSession,
     PostgresStatisticsConfiguration,
+    PrecisePlannerEstimate,
 )
 from extstats_advisor.dbms.postgres.profiling import profile_postgres_singletons
 from extstats_advisor.dbms.postgres.recommendation import (
@@ -68,6 +69,7 @@ __all__ = [
     "PostgresSearchEvaluator",
     "PostgresSnapshotAcquirer",
     "PostgresStatisticsConfiguration",
+    "PrecisePlannerEstimate",
     "PreparedPostgresPlannerSandbox",
     "RelationNotFoundError",
     "SampleAcquisitionError",
